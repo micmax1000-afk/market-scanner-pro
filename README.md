@@ -189,3 +189,132 @@ si riattiva al primo accesso (qualche secondo di attesa). Inoltre, se
 il repository è pubblico, chiunque può vedere il codice sorgente (non
 le tue credenziali, che restano nei Secrets criptati di Streamlit
 Cloud, mai nel repository).
+
+## Backtest del segnale ACQUISTO/VENDITA (confronto soglie 2/3/4)
+
+Nella tab "Backtest" c'è una sezione dedicata a testare storicamente
+se 2, 3 o 4 conferme minime funzionano meglio, su un universo di
+titoli a tua scelta e sugli ultimi ~2 anni di dati giornalieri.
+
+Cammina nel tempo giorno per giorno usando solo i dati fino a quel
+momento (nessun lookahead), registra ogni volta che scatta un segnale
+ACQUISTO o VENDITA con ciascuna soglia, e alla fine misura quante
+volte il prezzo si è davvero mosso nella direzione prevista entro
+l'orizzonte scelto (5, 10 o 20 giorni).
+
+Da tenere presente leggendo i risultati: soglie più alte danno sempre
+un numero di segnali minore o uguale (più selettive), ma una
+percentuale di successo alta su pochi segnali (es. 60% su 5 casi) è
+poco affidabile — un numero maggiore di segnali con una percentuale
+comunque buona è generalmente un'indicazione più solida.
+
+## Due nuove strategie di solo ACQUISTO
+
+Oltre al segnale combinato (rottura trend line + conferme), ci sono
+ora due strategie indipendenti, entrambe visibili nella tab "Score"
+(con il dettaglio di ogni condizione ✅/❌), come colonne nello Scanner,
+e testabili singolarmente nella tab "Backtest".
+
+### 📉 Rottura resistenza discendente con momentum ancora basso
+
+Compra la rottura (non il ritracciamento) quando **tutte** queste
+condizioni sono vere insieme:
+- Il prezzo rompe (o è appena sopra) la trend line di resistenza
+  discendente (entro il 2%)
+- Stocastico 10-3-6 ancora basso (K < 40)
+- RSI ancora basso (< 50)
+- Bande di Bollinger "vicine" tra loro, cioè in squeeze: la larghezza
+  attuale delle bande è tra il 30% più stretto degli ultimi 100 giorni
+
+L'idea: una rottura di resistenza mentre gli oscillatori sono ancora
+bassi (non ipercomprati) avviene "presto" nel movimento, lasciando più
+margine di salita rispetto a comprare una rottura quando RSI/Stocastico
+sono già a 80-90. Lo squeeze delle Bollinger è un classico segnale di
+bassa volatilità che spesso precede un movimento direzionale forte,
+quindi rafforza la view che la rottura non sia "rumore".
+
+### 📈 Pullback alla EMA20 in trend forte (strategia proposta)
+
+L'idea di base: comprare un breakout puro spesso significa comprare
+quando il titolo è già "esteso", con più rischio di rientro
+immediato. Storicamente tende a funzionare meglio comprare i
+ritracciamenti superficiali **dentro** un trend già forte e
+confermato, non l'inseguimento della rottura. Condizioni:
+- Trend strutturale rialzista: prezzo sopra EMA200, EMA20 sopra EMA50
+- Trend abbastanza forte da avere senso seguirlo: ADX > 20 con
+  +DI > -DI
+- Ritracciamento superficiale: il prezzo è tornato vicino alla EMA20
+  (entro l'1.5%), non un crollo profondo
+- MACD sopra la Signal line (conferma di ripartenza)
+- Volume non anomalo in negativo (almeno il 70% della media a 20
+  giorni, per evitare titoli poco liquidi in quel momento)
+
+Entrambe le soglie (percentuali di tolleranza, RSI/Stocastico max,
+ecc.) sono modificabili passando parametri diversi alle rispettive
+funzioni `compute_strategy_pullback_oversold()` e
+`compute_strategy_trend_pullback()` in `app.py`.
+
+## Scanner automatici (Lun-Ven) con GitHub Actions
+
+L'app Streamlit da sola NON può eseguire scansioni a orari fissi in
+background: gira solo quando qualcuno apre il link nel browser. Per
+avere scanner davvero automatici, il progetto usa **GitHub Actions**
+(gratuito) come scheduler, con uno script separato (`scheduled_scan.py`)
+che non dipende da Streamlit.
+
+Come funziona:
+- **Mercati Europei**: ogni giorno feriale alle ~10:00 (ora italiana),
+  scansiona Azioni Italiane + Indici Europei, sia Giornaliero che 4 Ore
+- **Mercati Americani**: ogni giorno feriale alle ~18:00 (ora italiana),
+  scansiona gli Indici Americani, sia Giornaliero che 4 Ore
+- Ogni scansione manda gli alert individuali su Telegram (stessa logica
+  dello Scanner V2 nell'app) più un messaggio di riepilogo finale
+
+### Setup (una tantum)
+
+1. **Struttura del codice**: la logica di calcolo ora vive in `core.py`
+   (nuovo file), riusato sia da `app.py` (interfaccia) sia da
+   `scheduled_scan.py` (scanner automatico). Carica entrambi i file
+   più `scheduled_scan.py` e la cartella `.github/workflows/` sul
+   repository GitHub (assicurati che il drag&drop includa anche le
+   cartelle nascoste come `.github/` — su GitHub.com il modo più
+   sicuro è "Add file" → "Upload files" trascinando l'intera cartella
+   del progetto, oppure usare `git push` da terminale).
+
+2. **Secrets per GitHub Actions**: gli scanner automatici hanno
+   bisogno di leggere `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`, ma
+   NON dai Secrets di Streamlit Cloud (sono due sistemi separati). Vai
+   su GitHub → il tuo repository → **Settings** → **Secrets and
+   variables** → **Actions** → **New repository secret**, e crea:
+   - `TELEGRAM_BOT_TOKEN` con il token del bot
+   - `TELEGRAM_CHAT_ID` con il chat id
+
+3. **Verifica che sia attivo**: vai su GitHub → il tuo repository →
+   tab **Actions**. Dovresti vedere i due workflow "Scanner Automatico
+   - Mercati Europei" e "Scanner Automatico - Mercati Americani". Puoi
+   lanciarli manualmente subito per testare, senza aspettare l'orario:
+   apri il workflow → **Run workflow** → **Run workflow**.
+
+### Nota sull'ora legale/solare
+
+GitHub Actions usa sempre l'orario UTC e non si adatta da solo al
+cambio d'ora italiano. I due workflow sono impostati per essere
+precisi in **ora legale** (CEST, UTC+2 — da fine marzo a fine ottobre,
+che copre quasi tutta la stagione di mercato attiva):
+- Europa: `0 8 * * 1-5` (08:00 UTC = 10:00 italiane in CEST)
+- USA: `0 16 * * 1-5` (16:00 UTC = 18:00 italiane in CEST)
+
+Durante l'**ora solare** (CET, UTC+1 — fine ottobre/fine marzo), gli
+scanner partiranno un'ora dopo (11:00 e 19:00 italiane) a meno che tu
+non aggiorni manualmente i due file in `.github/workflows/`:
+- in `scan_europe.yml`, cambia `cron: '0 8 * * 1-5'` in
+  `cron: '0 9 * * 1-5'`
+- in `scan_usa.yml`, cambia `cron: '0 16 * * 1-5'` in
+  `cron: '0 17 * * 1-5'`
+e poi tornare ai valori originali a fine marzo.
+
+### Perché Giornaliero + 4 Ore insieme
+
+Ogni esecuzione scansiona automaticamente **entrambi** i timeframe in
+sequenza (non serve scegliere): prima il Giornaliero, poi il 4 Ore,
+sullo stesso universo di titoli.
