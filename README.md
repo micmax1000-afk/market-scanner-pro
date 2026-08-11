@@ -318,3 +318,35 @@ e poi tornare ai valori originali a fine marzo.
 Ogni esecuzione scansiona automaticamente **entrambi** i timeframe in
 sequenza (non serve scegliere): prima il Giornaliero, poi il 4 Ore,
 sullo stesso universo di titoli.
+
+## Backtest realistico con Stop Loss / Take Profit
+
+Il backtest "a orizzonte fisso" (5/10/20 giorni) risponde solo alla
+domanda "il prezzo è più alto dopo N giorni?", ignorando cosa succede
+nel mezzo — non è come si opera davvero, e un "successo %" da solo
+non dice se un sistema è profittevole (dipende anche da quanto guadagni
+quando va bene vs quanto perdi quando va male).
+
+La nuova sezione "🎯 Backtest realistico con Stop Loss / Take Profit"
+(tab Backtest) simula un trade vero:
+- **Entrata**: al prezzo di chiusura del giorno del segnale
+- **Stop Loss e Take Profit**: espressi come multipli dell'ATR (la
+  volatilità del titolo), non valori fissi, così si adattano
+  automaticamente a ogni titolo
+- **Uscita**: al primo evento tra stop loss toccato, take profit
+  toccato, o scadenza del periodo massimo (chiusura al prezzo di quel
+  giorno). Se nello stesso giorno vengono toccati sia stop che target,
+  per prudenza si assume che lo stop sia stato colpito per primo
+
+Funziona con qualunque delle tre strategie (segnale combinato o le due
+strategie di solo acquisto), su qualunque universo di titoli.
+
+**Come leggere il risultato:**
+- **R medio**: guadagno/perdita medio per trade, espresso in multipli
+  del rischio (1R = distanza tra ingresso e stop loss — es. se rischi
+  l'1.5x ATR e guadagni il 3x ATR, quel trade vale +2R). Un R medio
+  positivo con **Profit Factor > 1** (somma dei guadagni / somma delle
+  perdite) significa che il sistema guadagna più di quanto perde in
+  totale — è la metrica che conta davvero, non solo la percentuale di
+  trade vincenti.
+- Take Profit % + Stop Loss % + Timeout % sommano sempre a 100.
