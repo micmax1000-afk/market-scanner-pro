@@ -418,6 +418,87 @@ with tab5:
             if summary["Segnali totali"] == 0:
                 st.warning("Nessun segnale trovato in questo universo/periodo.")
 
+    st.subheader("🎯 Backtest realistico con Stop Loss / Take Profit")
+    st.caption(
+        "A differenza dei backtest sopra (che guardano solo se il prezzo è più alto "
+        "dopo N giorni fissi), questo simula un trade vero: entra al segnale, esce in "
+        "perdita controllata se tocca lo stop, in guadagno se tocca il target, o "
+        "altrimenti alla scadenza. Stop e target sono multipli dell'ATR (volatilità), "
+        "così si adattano automaticamente a ogni titolo."
+    )
+
+    sl_tp_strategy_choice = st.selectbox(
+        "Strategia da testare",
+        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)"],
+        key="sl_tp_strategy_choice"
+    )
+    sl_tp_universe = st.multiselect(
+        "Universo per il backtest",
+        ["Azioni Italiane", "Indici Americani", "Indici Europei"],
+        default=["Azioni Italiane"],
+        key="sl_tp_universe"
+    )
+    col_sl, col_tp, col_hold = st.columns(3)
+    with col_sl:
+        sl_mult = st.number_input("Stop Loss (x ATR)", min_value=0.5, max_value=5.0, value=1.5, step=0.25, key="sl_mult")
+    with col_tp:
+        tp_mult = st.number_input("Take Profit (x ATR)", min_value=0.5, max_value=10.0, value=3.0, step=0.25, key="tp_mult")
+    with col_hold:
+        max_hold = st.number_input("Giorni massimi in trade", min_value=5, max_value=60, value=20, step=5, key="max_hold")
+
+    if st.button("Esegui Backtest Stop Loss / Take Profit"):
+        tickers_sltp = list(dict.fromkeys(t for cat in sl_tp_universe for t in TICKER_CATALOG[cat].values()))
+        if not tickers_sltp:
+            st.warning("Seleziona almeno un universo di titoli.")
+        else:
+            if sl_tp_strategy_choice == "Segnale combinato (rottura + conferme)":
+                strategy_fn = lambda d: compute_trade_signal(d, min_confirmations=3)
+            elif sl_tp_strategy_choice == "Rottura resistenza + momentum basso (la tua)":
+                strategy_fn = compute_strategy_pullback_oversold
+            else:
+                strategy_fn = compute_strategy_trend_pullback
+
+            trades_by_ticker = {}
+            progress = st.progress(0.0)
+            for idx, tkr in enumerate(tickers_sltp):
+                try:
+                    hist = download_data(tkr, period="2y", interval="1d")
+                    if not hist.empty and len(hist) >= 250:
+                        trades_by_ticker[tkr] = backtest_strategy_sl_tp(
+                            hist, strategy_fn,
+                            atr_sl_mult=sl_mult, atr_tp_mult=tp_mult, max_holding_days=int(max_hold)
+                        )
+                except Exception as e:
+                    print(f"Errore backtest SL/TP su {tkr}: {e}")
+                progress.progress((idx + 1) / len(tickers_sltp))
+
+            summary = summarize_sl_tp_backtest(trades_by_ticker)
+            st.write(summary)
+
+            if summary["Trade totali"] == 0:
+                st.warning("Nessun segnale trovato in questo universo/periodo.")
+            else:
+                r_medio = summary["R medio"]
+                pf = summary["Profit Factor"]
+                if r_medio is not None:
+                    if r_medio > 0 and (pf is None or pf > 1):
+                        st.success(
+                            f"R medio positivo ({r_medio}) e Profit Factor "
+                            f"{'n/d' if pf is None else pf}: nel periodo testato il sistema "
+                            f"avrebbe guadagnato più di quanto perso, considerando SL/TP."
+                        )
+                    else:
+                        st.warning(
+                            f"R medio {r_medio}, Profit Factor {'n/d' if pf is None else pf}: "
+                            f"con questi SL/TP il sistema non risulta profittevole nel periodo testato."
+                        )
+                st.caption(
+                    "'R medio' = guadagno/perdita medio per trade espresso in multipli del "
+                    "rischio (1R = distanza tra ingresso e stop loss). Un R medio positivo con "
+                    "Profit Factor > 1 significa che i guadagni superano le perdite in totale, "
+                    "non solo che vinci più spesso di quanto perdi."
+                )
+
     st.subheader("Backtest dei Breakout")
 
     if st.button("Esegui Backtest Breakout"):
