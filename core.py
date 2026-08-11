@@ -1105,6 +1105,112 @@ def summarize_strategy_backtest(records_by_ticker, horizon=10):
         "Perf peggiore %": round(float(np.min(perf_values)), 2),
     }
 
+# ==========================
+# BACKTEST REALISTICO CON STOP LOSS / TAKE PROFIT (basati su ATR)
+# ==========================
+# A differenza dei backtest "a orizzonte fisso" sopra (che guardano solo
+# se il prezzo è più alto dopo N giorni, ignorando cosa succede nel
+# mezzo), questo simula un trade vero: entra al segnale, esce in perdita
+# controllata se tocca lo stop loss, esce in guadagno se tocca il take
+# profit, altrimenti chiude alla scadenza del periodo massimo. SL/TP
+# sono espressi come multipli dell'ATR (volatilità), non valori fissi,
+# così si adattano automaticamente a ogni titolo.
+#
+# Se nello stesso giorno il prezzo tocca sia lo stop che il target,
+# per prudenza si assume che lo stop sia stato colpito per primo
+# (non sappiamo l'ordine intra-day dei prezzi).
+
+def backtest_strategy_sl_tp(data, strategy_fn, atr_sl_mult=1.5, atr_tp_mult=3.0,
+                             max_holding_days=20, min_history=200):
+    data_ind = compute_indicators(data)
+    atr_series = compute_atr(data_ind)
+    n = len(data_ind)
+    trades = []
+
+    for i in range(min_history, n):
+        window = data_ind.iloc[:i + 1]
+        if len(window) < 90:
+            continue
+
+        result = strategy_fn(window)
+        if result.get("signal") != "ACQUISTO":
+            continue
+
+        entry_price = data_ind["Close"].iloc[i]
+        atr_val = atr_series.iloc[i]
+        if pd.isna(atr_val) or atr_val <= 0:
+            continue
+
+        risk_per_share = atr_sl_mult * atr_val
+        stop_price = entry_price - risk_per_share
+        target_price = entry_price + atr_tp_mult * atr_val
+
+        outcome, exit_price, days_held = None, None, None
+
+        for offset in range(1, max_holding_days + 1):
+            j = i + offset
+            if j >= n:
+                break
+            day_high = data_ind["High"].iloc[j]
+            day_low = data_ind["Low"].iloc[j]
+            hit_sl = day_low <= stop_price
+            hit_tp = day_high >= target_price
+
+            if hit_sl:  # copre anche il caso in cui entrambi vengono toccati lo stesso giorno
+                outcome, exit_price, days_held = "stop_loss", stop_price, offset
+                break
+            elif hit_tp:
+                outcome, exit_price, days_held = "take_profit", target_price, offset
+                break
+
+        if outcome is None:
+            j = min(i + max_holding_days, n - 1)
+            if j <= i:
+                continue
+            outcome = "timeout"
+            exit_price = data_ind["Close"].iloc[j]
+            days_held = j - i
+
+        r_multiple = (exit_price - entry_price) / risk_per_share
+        trades.append({
+            "date": window.index[-1],
+            "outcome": outcome,
+            "r_multiple": r_multiple,
+            "days_held": days_held,
+        })
+
+    return trades
+
+def summarize_sl_tp_backtest(trades_by_ticker):
+    all_trades = []
+    for per_ticker in trades_by_ticker.values():
+        all_trades.extend(per_ticker)
+
+    if not all_trades:
+        return {
+            "Trade totali": 0, "Take Profit %": None, "Stop Loss %": None, "Timeout %": None,
+            "R medio": None, "Profit Factor": None, "Giorni medi in trade": None,
+        }
+
+    n_trades = len(all_trades)
+    wins = [t for t in all_trades if t["outcome"] == "take_profit"]
+    losses = [t for t in all_trades if t["outcome"] == "stop_loss"]
+    timeouts = [t for t in all_trades if t["outcome"] == "timeout"]
+
+    r_values = [t["r_multiple"] for t in all_trades]
+    gross_win = sum(r for r in r_values if r > 0)
+    gross_loss = -sum(r for r in r_values if r < 0)
+
+    return {
+        "Trade totali": n_trades,
+        "Take Profit %": round(len(wins) / n_trades * 100, 1),
+        "Stop Loss %": round(len(losses) / n_trades * 100, 1),
+        "Timeout %": round(len(timeouts) / n_trades * 100, 1),
+        "R medio": round(float(np.mean(r_values)), 2),
+        "Profit Factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
+        "Giorni medi in trade": round(float(np.mean([t["days_held"] for t in all_trades])), 1),
+    }
+
 def backtest_trade_signal(data, thresholds=(2, 3, 4), forward_days=(5, 10, 20), min_history=200):
     """Cammina nel tempo (walk-forward, nessun lookahead: ogni giorno
     vede solo il passato fino a quel momento) e per ogni soglia di
