@@ -360,99 +360,37 @@ with tab4:
         "gestione del rischio che loro applicano in più: qui è solo il ranking di base)."
     )
 
-    momentum_source = st.selectbox(
-        "Fonte dati",
-        ["yfinance (locale, funziona subito)", "Twelve Data via Worker Cloudflare (metodologia 12-1, richiede setup)"],
-        key="momentum_source"
-    )
-
     momentum_universe = st.multiselect(
         "Universo da classificare",
         ["Azioni Italiane", "Indici Americani", "Indici Europei"],
         default=["Azioni Italiane"],
         key="momentum_universe"
     )
+    momentum_lookback = st.selectbox(
+        "Periodo di lookback",
+        [("1 mese (~21gg)", 21), ("3 mesi (~63gg)", 63), ("6 mesi (~126gg)", 126), ("12 mesi (~252gg)", 252)],
+        format_func=lambda x: x[0],
+        index=2,
+        key="momentum_lookback"
+    )
 
-    if momentum_source.startswith("yfinance"):
-        momentum_lookback = st.selectbox(
-            "Periodo di lookback",
-            [("1 mese (~21gg)", 21), ("3 mesi (~63gg)", 63), ("6 mesi (~126gg)", 126), ("12 mesi (~252gg)", 252)],
-            format_func=lambda x: x[0],
-            index=2,
-            key="momentum_lookback"
-        )
-
-        if st.button("Calcola Momentum Ranking"):
-            momentum_tickers = list(dict.fromkeys(t for cat in momentum_universe for t in TICKER_CATALOG[cat].values()))
-            if not momentum_tickers:
-                st.warning("Seleziona almeno un universo di titoli.")
+    if st.button("Calcola Momentum Ranking"):
+        momentum_tickers = list(dict.fromkeys(t for cat in momentum_universe for t in TICKER_CATALOG[cat].values()))
+        if not momentum_tickers:
+            st.warning("Seleziona almeno un universo di titoli.")
+        else:
+            with st.spinner(f"Calcolo ranking su {len(momentum_tickers)} titoli..."):
+                df_momentum = compute_momentum_ranking(momentum_tickers, lookback_days=momentum_lookback[1])
+            if df_momentum.empty:
+                st.warning("Dati insufficienti per calcolare il ranking su questo universo/periodo.")
             else:
-                with st.spinner(f"Calcolo ranking su {len(momentum_tickers)} titoli..."):
-                    df_momentum = compute_momentum_ranking(momentum_tickers, lookback_days=momentum_lookback[1])
-                if df_momentum.empty:
-                    st.warning("Dati insufficienti per calcolare il ranking su questo universo/periodo.")
-                else:
-                    st.dataframe(df_momentum, use_container_width=True, hide_index=True)
-                    st.caption(
-                        "I titoli in cima hanno avuto il rendimento migliore nel periodo scelto. "
-                        "Il fattore momentum scommette che chi ha performato meglio di recente "
-                        "tenda a continuare nel breve-medio termine — non è garantito, e funziona "
-                        "in media su portafogli diversificati, non sul singolo titolo isolato."
-                    )
-    else:
-        st.caption(
-            "Usa la metodologia 'momentum 12-1' (Jegadeesh-Titman): salta l'ultimo mese prima "
-            "di misurare il rendimento, per evitare l'effetto di reversal a breve termine. "
-            "⚠️ ATTENZIONE: Twelve Data potrebbe usare un formato ticker diverso da yfinance "
-            "(es. senza '.MI' per le azioni italiane, o simboli diversi per gli indici) — se "
-            "vedi errori 'Storico insufficiente' per molti titoli, controlla il formato dei "
-            "simboli sulla documentazione di Twelve Data. Il primo calcolo della giornata può "
-            "richiedere alcuni minuti (piano gratuito limitato a 8 richieste/minuto); le "
-            "successive nello stesso giorno sono quasi istantanee grazie alla cache."
-        )
-        worker_url_input = st.text_input(
-            "URL del Worker Cloudflare",
-            value=MOMENTUM_WORKER_URL or "",
-            placeholder="https://momentum-ranking.tuonome.workers.dev",
-            key="momentum_worker_url"
-        )
-        col_lb, col_skip = st.columns(2)
-        with col_lb:
-            momentum_lookback_worker = st.number_input("Lookback (giorni)", min_value=21, max_value=504, value=126, step=21, key="momentum_lookback_worker")
-        with col_skip:
-            momentum_skip_recent = st.number_input("Salta ultimi (giorni)", min_value=0, max_value=63, value=21, step=7, key="momentum_skip_recent")
-
-        if st.button("Calcola Momentum Ranking (Worker)"):
-            momentum_tickers = list(dict.fromkeys(t for cat in momentum_universe for t in TICKER_CATALOG[cat].values()))
-            if not momentum_tickers:
-                st.warning("Seleziona almeno un universo di titoli.")
-            elif not worker_url_input:
-                st.warning("Inserisci l'URL del Worker (o impostalo come Secret MOMENTUM_WORKER_URL).")
-            else:
-                with st.spinner(
-                    f"Calcolo ranking su {len(momentum_tickers)} titoli via Twelve Data "
-                    f"(può richiedere qualche minuto se non in cache)..."
-                ):
-                    try:
-                        df_momentum_w = compute_momentum_ranking_worker(
-                            momentum_tickers, worker_url_input,
-                            lookback_days=int(momentum_lookback_worker),
-                            skip_recent_days=int(momentum_skip_recent)
-                        )
-                    except Exception as e:
-                        st.error(f"Errore nella chiamata al Worker: {e}")
-                        df_momentum_w = None
-
-                if df_momentum_w is not None:
-                    if df_momentum_w.empty:
-                        st.warning("Nessun risultato valido. Controlla il formato dei ticker per Twelve Data.")
-                    else:
-                        st.dataframe(df_momentum_w, use_container_width=True, hide_index=True)
-                        st.caption(
-                            "'Percentile' = posizione relativa nel ranking (100 = il migliore "
-                            "dell'universo, 0 = il peggiore). Rendimento calcolato saltando gli "
-                            "ultimi giorni scelti per evitare il reversal a breve termine."
-                        )
+                st.dataframe(df_momentum, use_container_width=True, hide_index=True)
+                st.caption(
+                    "I titoli in cima hanno avuto il rendimento migliore nel periodo scelto. "
+                    "Il fattore momentum scommette che chi ha performato meglio di recente "
+                    "tenda a continuare nel breve-medio termine — non è garantito, e funziona "
+                    "in media su portafogli diversificati, non sul singolo titolo isolato."
+                )
 
     st.subheader("📊 Importanza delle Feature (Scanner V3)")
 

@@ -30,7 +30,6 @@ def _get_secret(key, default=""):
 
 BOT_TOKEN = _get_secret("TELEGRAM_BOT_TOKEN")
 CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
-MOMENTUM_WORKER_URL = _get_secret("MOMENTUM_WORKER_URL")  # opzionale: es. https://momentum-ranking.tuonome.workers.dev
 
 # ==========================
 # LISTA TITOLI ITALIANI
@@ -1037,52 +1036,6 @@ def compute_momentum_ranking(tickers, lookback_days=126, period="1y", interval="
     if not df.empty:
         df = df.sort_values(f"Rendimento {lookback_days}gg %", ascending=False).reset_index(drop=True)
         df.insert(0, "Rank", range(1, len(df) + 1))
-    return df
-
-def compute_momentum_ranking_worker(tickers, worker_url, lookback_days=126, skip_recent_days=21, timeout=600):
-    """Versione alternativa che chiama il Worker Cloudflare (Twelve
-    Data + cache KV) invece di scaricare da yfinance in locale. Usa la
-    metodologia 'momentum 12-1' (Jegadeesh-Titman): salta gli ultimi
-    `skip_recent_days` giorni prima di misurare il rendimento, per
-    evitare l'effetto di reversal a breve termine. Il primo calcolo
-    della giornata può richiedere alcuni minuti (il piano gratuito di
-    Twelve Data è limitato a 8 richieste/minuto, gestite dal Worker
-    stesso a gruppi con pausa); le chiamate successive nello stesso
-    giorno sono quasi istantanee grazie alla cache KV a 24h del Worker.
-
-    Restituisce un DataFrame nello stesso formato di
-    compute_momentum_ranking(), così l'interfaccia resta identica
-    indipendentemente dalla fonte scelta."""
-    if not worker_url:
-        raise ValueError("URL del Worker non configurato.")
-
-    params = {
-        "symbols": ",".join(tickers),
-        "lookback": lookback_days,
-        "skipRecent": skip_recent_days,
-    }
-    response = requests.get(worker_url.rstrip("/") + "/momentum", params=params, timeout=timeout)
-    response.raise_for_status()
-    payload = response.json()
-
-    ranking = payload.get("ranking", [])
-    errors = payload.get("errors", [])
-    if errors:
-        for err in errors:
-            print(f"Errore momentum ranking (Worker) su {err.get('symbol')}: {err.get('error')}")
-
-    col_name = f"Rendimento {lookback_days}-{skip_recent_days}gg %"
-    results = [{
-        "Rank": r["rank"],
-        "Ticker": r["symbol"],
-        "Prezzo": r.get("recentClose"),
-        col_name: r["returnPct"],
-        "Percentile": r.get("percentile"),
-    } for r in ranking]
-
-    df = pd.DataFrame(results)
-    if not df.empty:
-        df = df.sort_values("Rank").reset_index(drop=True)
     return df
 
 def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Giornaliero",
