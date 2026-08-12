@@ -30,6 +30,7 @@ def _get_secret(key, default=""):
 
 BOT_TOKEN = _get_secret("TELEGRAM_BOT_TOKEN")
 CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
+MOMENTUM_WORKER_URL = _get_secret("MOMENTUM_WORKER_URL")  # opzionale: es. https://momentum-ranking.tuonome.workers.dev
 
 # ==========================
 # LISTA TITOLI ITALIANI
@@ -518,6 +519,71 @@ def compute_atr(data, period=14):
     return atr
 
 # ==========================
+# SUPERTREND
+# ==========================
+# Indicatore trend-following basato sull'ATR: traccia una linea di
+# supporto sotto il prezzo quando il trend è rialzista (la linea sale
+# seguendo il prezzo ma non scende mai finché il trend regge), e sopra
+# quando è ribassista. Usato qui SOLO come stop loss dinamico
+# (trailing) alternativo a quello fisso a multiplo di ATR nel backtest
+# SL/TP: invece di uno stop fermo dal giorno di ingresso, "segue" il
+# prezzo verso l'alto stringendosi man mano che il trend si sviluppa.
+
+def compute_supertrend(data, period=10, multiplier=3.0):
+    high = data["High"]
+    low = data["Low"]
+    close = data["Close"]
+
+    atr = compute_atr(data, period=period)
+    hl2 = (high + low) / 2
+
+    upper_band = hl2 + multiplier * atr
+    lower_band = hl2 - multiplier * atr
+
+    n = len(data)
+    supertrend = pd.Series(index=data.index, dtype=float)
+    direction = pd.Series(index=data.index, dtype=float)  # 1 = rialzista, -1 = ribassista
+
+    final_upper = upper_band.copy()
+    final_lower = lower_band.copy()
+
+    for i in range(1, n):
+        # bootstrap: finché il valore precedente è NaN (riscaldamento ATR),
+        # la banda parte semplicemente dal valore di oggi, altrimenti la
+        # regola ricorsiva confrontata con un NaN non si aggiornerebbe mai
+        # più (resterebbe bloccata a NaN per sempre)
+        if pd.isna(final_upper.iloc[i - 1]):
+            final_upper.iloc[i] = upper_band.iloc[i]
+        elif upper_band.iloc[i] < final_upper.iloc[i - 1] or close.iloc[i - 1] > final_upper.iloc[i - 1]:
+            final_upper.iloc[i] = upper_band.iloc[i]
+        else:
+            final_upper.iloc[i] = final_upper.iloc[i - 1]
+
+        if pd.isna(final_lower.iloc[i - 1]):
+            final_lower.iloc[i] = lower_band.iloc[i]
+        elif lower_band.iloc[i] > final_lower.iloc[i - 1] or close.iloc[i - 1] < final_lower.iloc[i - 1]:
+            final_lower.iloc[i] = lower_band.iloc[i]
+        else:
+            final_lower.iloc[i] = final_lower.iloc[i - 1]
+
+        if pd.isna(final_upper.iloc[i]) or pd.isna(final_lower.iloc[i]):
+            continue  # ancora in riscaldamento: direction/supertrend restano NaN
+
+        if pd.isna(supertrend.iloc[i - 1]):
+            direction.iloc[i] = 1 if close.iloc[i] > final_upper.iloc[i] else -1
+        elif direction.iloc[i - 1] == 1:
+            direction.iloc[i] = -1 if close.iloc[i] < final_lower.iloc[i] else 1
+        else:
+            direction.iloc[i] = 1 if close.iloc[i] > final_upper.iloc[i] else -1
+
+        supertrend.iloc[i] = final_lower.iloc[i] if direction.iloc[i] == 1 else final_upper.iloc[i]
+
+    data = data.copy()
+    data["Supertrend"] = supertrend
+    data["Supertrend_Direction"] = direction
+    return data
+
+# ==========================
 # SCORE MODULI
 # ==========================
 
@@ -589,7 +655,14 @@ def volume_score_advanced(data):
     return score
 
 def breakout_score_advanced(data):
-    recent = data.tail(60)
+    # BUGFIX: la resistenza deve essere il massimo dei 60 giorni PRIMA di
+    # oggi, non inclusi oggi. Includendo oggi, resistance >= High di oggi
+    # >= Close di oggi sempre per definizione, quindi breakout_ratio non
+    # può quasi mai essere positivo: il componente "breakout" dello score
+    # e questo filtro erano di fatto sempre a zero.
+    recent = data.iloc[-61:-1] if len(data) > 60 else data.iloc[:-1]
+    if recent.empty:
+        return 0
     resistance = recent["High"].max()
     last_close = data["Close"].iloc[-1]
     atr = compute_atr(data).iloc[-1]
@@ -684,6 +757,62 @@ def compute_score(data):
     return compute_weighted_score(data)
 
 # ==========================
+# SCORE PESATO V4 (sperimentale: consolida la ridondanza del trend)
+# ==========================
+# Nello Score V3, 4 componenti su 11 misurano tutte, da angolazioni
+# diverse, la stessa cosa: "il titolo è in un trend rialzista forte"
+# (allineamento EMA, pendenza della regressione a 60gg, rottura della
+# trend line sui pivot, ADX) — insieme pesano il 42% dello score
+# finale. Un titolo in trend pulito guadagna punti 4 volte per lo
+# stesso fenomeno, non 4 conferme davvero indipendenti.
+#
+# Lo Score V4 le consolida in UNA sola componente "forza del trend"
+# (media delle 4 normalizzate), pesata una sola volta, e ridistribuisce
+# il peso liberato su volume, breakout e Bollinger: dimensioni più
+# indipendenti dal trend puro (liquidità/partecipazione, estensione di
+# prezzo, volatilità). Non sostituisce lo Score V3 (che resta invariato
+# ovunque nell'app): è pensato per essere confrontato fianco a fianco.
+
+def compute_trend_strength_score(data, last):
+    """Media di 4 misure di forza del trend, ciascuna normalizzata sul
+    proprio massimo (0-1), poi riportata in scala 0-100 come le altre
+    componenti dello score."""
+    components_norm = [
+        trend_score(last) / 20,
+        trendline_score_advanced(data) / 15,
+        trendline_break_score(data) / 10,
+        adx_score(data) / 10,
+    ]
+    return round(sum(components_norm) / len(components_norm) * 100, 2)
+
+def compute_weighted_score_v4(data):
+    last = data.iloc[-1]
+
+    trend_strength = compute_trend_strength_score(data, last)
+
+    # (punteggio_grezzo, punteggio_massimo_possibile, peso)
+    components = {
+        "trend_strength":   (trend_strength, 100, 0.20),  # consolidata (era 0.16+0.06+0.10+0.10=0.42)
+        "momentum":         (momentum_score(last), 15, 0.06),
+        "macd":             (macd_score(last), 15, 0.06),
+        "volume":           (volume_score_advanced(data), 20, 0.20),   # era 0.13
+        "breakout":         (breakout_score_advanced(data), 15, 0.20),  # era 0.13
+        "stochastic":       (stochastic_score(data), 10, 0.04),
+        "bollinger":        (bollinger_score(data), 8, 0.18),          # era 0.10
+        "vwap":             (vwap_score(data), 5, 0.06),
+    }
+
+    weighted = 0.0
+    for raw_score, max_score, weight in components.values():
+        normalized = (raw_score / max_score) if max_score else 0
+        weighted += normalized * weight * 100
+
+    return round(min(weighted, 100), 2)
+
+def compute_score_v4(data):
+    return compute_weighted_score_v4(data)
+
+# ==========================
 # FILTRI SCANNER V2
 # ==========================
 
@@ -694,19 +823,19 @@ def filter_atr(data, max_atr_ratio=0.03):
         return False
     return atr <= price * max_atr_ratio
 
-def filter_volatility(data, max_volatility=0.04):
+def filter_volatility(data, max_volatility=0.08):
     recent = data.tail(20)
     high = recent["High"].max()
     low = recent["Low"].min()
     volatility = (high - low) / recent["Close"].iloc[-1]
     return volatility <= max_volatility
 
-def filter_volume_spike(data):
+def filter_volume_spike(data, min_ratio=1.0):
     vol20 = data["Volume"].rolling(20).mean().iloc[-1]
     last_vol = data["Volume"].iloc[-1]
     if not vol20 or pd.isna(vol20):
         return False
-    return last_vol > vol20 * 1.2
+    return last_vol > vol20 * min_ratio
 
 def filter_trendline(data):
     recent = data.tail(60)
@@ -717,15 +846,19 @@ def filter_trendline(data):
     m, q = np.polyfit(x, y, 1)
     return m > 0
 
-def filter_breakout(data):
-    recent = data.tail(60)
+def filter_breakout(data, min_breakout_ratio=0.2):
+    # Stesso bugfix di breakout_score_advanced: resistenza sui 60gg
+    # PRIMA di oggi, non inclusi oggi.
+    recent = data.iloc[-61:-1] if len(data) > 60 else data.iloc[:-1]
+    if recent.empty:
+        return False
     resistance = recent["High"].max()
     close = data["Close"].iloc[-1]
     atr = compute_atr(data).iloc[-1]
     if atr == 0 or pd.isna(atr):
         return False
     breakout_ratio = (close - resistance) / atr
-    return breakout_ratio > 0.5
+    return breakout_ratio > min_breakout_ratio
 
 def filter_ema(data):
     last = data.iloc[-1]
@@ -763,17 +896,19 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
     pullback_os_buy = pullback_os["signal"] == "ACQUISTO"
     pullback_trend_buy = pullback_trend["signal"] == "ACQUISTO"
 
-    strong_score = score >= 75
-    strong_breakout = breakout >= 10
-    strong_volume = vol_spike >= 4
-    strong_trendline = trendline >= 10
-    stoch_signal = stoch_k > stoch_d and stoch_k < 80
-    strong_adx = (not pd.isna(adx_val)) and adx_val > 25 and plus_di > minus_di
+    ref_index = get_reference_index(ticker)
+    market_regime = compute_market_regime(ref_index) if ref_index else None
+
     has_trade_signal = trade["signal"] != "NEUTRALE"
 
-    if not (strong_score or strong_breakout or strong_volume or strong_trendline
-            or stoch_signal or resistance_break or support_break or strong_adx
-            or has_trade_signal or pullback_os_buy or pullback_trend_buy):
+    # L'alert scatta SOLO per una delle 3 strategie testate con backtest
+    # (segnale combinato, rottura+momentum basso, pullback EMA20). Le
+    # altre condizioni (Score alto, Breakout, Volume Spike, Trendline,
+    # Stocastico, ADX, rottura senza conferme) non sono mai state
+    # testate individualmente con un backtest: restano visibili nel
+    # corpo del messaggio come contesto, ma non fanno più scattare
+    # l'alert da sole, per evitare troppe notifiche poco affidabili.
+    if not (has_trade_signal or pullback_os_buy or pullback_trend_buy):
         return
 
     adx_str = f"{round(adx_val, 1)}" if not pd.isna(adx_val) else "n/d"
@@ -800,6 +935,8 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
     if strategy_lines:
         strategy_lines += "\n"
 
+    regime_str = {"Rialzista": "🟢 Rialzista", "Ribassista": "🔴 Ribassista"}.get(market_regime, "n/d")
+
     msg = (
         f"🚨 <b>ALERT V2: {ticker}</b> ({timeframe_label})\n"
         f"{signal_header}"
@@ -811,7 +948,8 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         f"{trendline_line}\n"
         f"🎯 Stocastico K/D: {round(stoch_k,2)} / {round(stoch_d,2)}\n"
         f"💪 ADX: {adx_str}\n"
-        f"💰 Sopra VWAP: {'sì' if above_vwap else 'no'}\n\n"
+        f"💰 Sopra VWAP: {'sì' if above_vwap else 'no'}\n"
+        f"🌍 Regime di mercato: {regime_str}\n\n"
         f"⚠️ Segnale algoritmico, non è un consiglio di investimento."
     )
 
@@ -821,13 +959,141 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
 # SCANNER V2
 # ==========================
 
-def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Giornaliero"):
+# ==========================
+# REGIME DI MERCATO (informativo, non filtra nulla automaticamente)
+# ==========================
+# Un titolo può dare un segnale tecnico valido sul suo grafico e ciò
+# nonostante muoversi contro l'onda di fondo se il mercato generale è
+# in un trend ribassista. Questa colonna mostra, per riferimento, se
+# l'indice associato al titolo è sopra o sotto la propria media mobile
+# a 200 giorni (una misura standard e grezza di "il mercato di fondo è
+# rialzista o ribassista"). È solo un'informazione in più da valutare,
+# NON filtra o blocca nessun segnale.
+
+def get_reference_index(ticker):
+    """Associa a ogni ticker l'indice più adatto a rappresentare il
+    'mercato generale' in cui si muove."""
+    if ticker in ITALIAN_TICKERS or ticker == "FTSEMIB.MI":
+        return "FTSEMIB.MI"
+    if ticker in US_INDICES.values():
+        return "^GSPC"  # S&P 500 come benchmark ampio USA
+    if ticker in EU_INDICES.values():
+        return "^STOXX50E"  # Euro Stoxx 50 come benchmark ampio Europa
+    return None  # ticker personalizzato non riconosciuto: nessun riferimento
+
+def compute_market_regime(reference_ticker, period="2y"):
+    """'Rialzista' se l'indice di riferimento chiude sopra la propria
+    media mobile semplice a 200 giorni, 'Ribassista' altrimenti, None
+    se non ci sono abbastanza dati."""
+    if reference_ticker is None:
+        return None
+    data = download_data(reference_ticker, period=period, interval="1d")
+    if data.empty or len(data) < 200:
+        return None
+    sma200 = data["Close"].rolling(200).mean()
+    last_close = data["Close"].iloc[-1]
+    last_sma = sma200.iloc[-1]
+    if pd.isna(last_sma):
+        return None
+    return "Rialzista" if last_close > last_sma else "Ribassista"
+
+# ==========================
+# MOMENTUM RANKING (fattore cross-sezionale, stile fondi sistematici)
+# ==========================
+# A differenza delle strategie sopra (segnale sì/no sul singolo
+# titolo), questo è un fattore: classifica TUTTO l'universo per
+# rendimento storico su un periodo (default 6 mesi) e mostra i
+# migliori. È il fattore "momentum" documentato in letteratura
+# accademica (Jegadeesh-Titman e centinaia di studi successivi) e
+# usato su vasta scala da fondi sistematici/CTA — con la differenza
+# che loro applicano anche position sizing su volatilità, gestione
+# del rischio e diversificazione su decine di mercati, cose che qui
+# non replichiamo: è solo il ranking di base.
+
+def compute_momentum_ranking(tickers, lookback_days=126, period="1y", interval="1d"):
+    """Per ogni ticker calcola il rendimento totale sugli ultimi
+    `lookback_days` giorni di trading (default ~126 = 6 mesi borsistici)
+    ed ordina dal migliore al peggiore."""
+    results = []
+    for ticker in tickers:
+        try:
+            data = download_data(ticker, period=period, interval=interval)
+            if data.empty or len(data) <= lookback_days:
+                continue
+            close_now = data["Close"].iloc[-1]
+            close_then = data["Close"].iloc[-(lookback_days + 1)]
+            if pd.isna(close_now) or pd.isna(close_then) or close_then == 0:
+                continue
+            momentum_return = (close_now - close_then) / close_then * 100
+            results.append({
+                "Ticker": ticker,
+                "Prezzo": round(close_now, 2),
+                f"Rendimento {lookback_days}gg %": round(momentum_return, 2),
+            })
+        except Exception as e:
+            print(f"Errore momentum ranking su {ticker}: {e}")
+
+    df = pd.DataFrame(results)
+    if not df.empty:
+        df = df.sort_values(f"Rendimento {lookback_days}gg %", ascending=False).reset_index(drop=True)
+        df.insert(0, "Rank", range(1, len(df) + 1))
+    return df
+
+def compute_momentum_ranking_worker(tickers, worker_url, lookback_days=126, skip_recent_days=21, timeout=600):
+    """Versione alternativa che chiama il Worker Cloudflare (Twelve
+    Data + cache KV) invece di scaricare da yfinance in locale. Usa la
+    metodologia 'momentum 12-1' (Jegadeesh-Titman): salta gli ultimi
+    `skip_recent_days` giorni prima di misurare il rendimento, per
+    evitare l'effetto di reversal a breve termine. Il primo calcolo
+    della giornata può richiedere alcuni minuti (il piano gratuito di
+    Twelve Data è limitato a 8 richieste/minuto, gestite dal Worker
+    stesso a gruppi con pausa); le chiamate successive nello stesso
+    giorno sono quasi istantanee grazie alla cache KV a 24h del Worker.
+
+    Restituisce un DataFrame nello stesso formato di
+    compute_momentum_ranking(), così l'interfaccia resta identica
+    indipendentemente dalla fonte scelta."""
+    if not worker_url:
+        raise ValueError("URL del Worker non configurato.")
+
+    params = {
+        "symbols": ",".join(tickers),
+        "lookback": lookback_days,
+        "skipRecent": skip_recent_days,
+    }
+    response = requests.get(worker_url.rstrip("/") + "/momentum", params=params, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+
+    ranking = payload.get("ranking", [])
+    errors = payload.get("errors", [])
+    if errors:
+        for err in errors:
+            print(f"Errore momentum ranking (Worker) su {err.get('symbol')}: {err.get('error')}")
+
+    col_name = f"Rendimento {lookback_days}-{skip_recent_days}gg %"
+    results = [{
+        "Rank": r["rank"],
+        "Ticker": r["symbol"],
+        "Prezzo": r.get("recentClose"),
+        col_name: r["returnPct"],
+        "Percentile": r.get("percentile"),
+    } for r in ranking]
+
+    df = pd.DataFrame(results)
+    if not df.empty:
+        df = df.sort_values("Rank").reset_index(drop=True)
+    return df
+
+def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Giornaliero",
+                    max_volatility=0.08, min_volume_ratio=1.0, min_breakout_ratio=0.2):
     if tickers is None:
         tickers = ITALIAN_TICKERS
     if period is None:
         period = "6mo" if interval == "1d" else "60d"
 
     results = []
+    regime_cache = {}  # evita di riscaricare lo stesso indice per ogni titolo
 
     for ticker in tickers:
         try:
@@ -840,27 +1106,37 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
             data = compute_indicators(data)
             score = compute_score(data)
 
+            # L'alert Telegram viene valutato per OGNI titolo scaricato,
+            # indipendentemente dai filtri della tabella qui sotto: i 7
+            # filtri sotto sono pensati per un breakout "classico", ma le
+            # strategie personalizzate (es. pullback con momentum ancora
+            # basso) cercano condizioni opposte e non li passerebbero mai,
+            # perdendo l'alert anche quando quella strategia dà ACQUISTO.
+            # send_alert_v2() decide da sola, al suo interno, se le
+            # condizioni (di una qualsiasi delle strategie) meritano un
+            # messaggio.
+            send_alert_v2(ticker, data, score, timeframe_label=timeframe_label)
+
             if not filter_ema(data):
                 continue
             if not filter_trendline(data):
                 continue
-            if not filter_volume_spike(data):
+            if not filter_volume_spike(data, min_ratio=min_volume_ratio):
                 continue
-            if not filter_breakout(data):
+            if not filter_breakout(data, min_breakout_ratio=min_breakout_ratio):
                 continue
             if not filter_atr(data):
                 continue
-            if not filter_volatility(data):
+            if not filter_volatility(data, max_volatility=max_volatility):
                 continue
             if not filter_stochastic(data):
                 continue
 
-            send_alert_v2(ticker, data, score, timeframe_label=timeframe_label)
-
             last = data.iloc[-1]
             atr_val = compute_atr(data).iloc[-1]
-            resistance = data.tail(60)["High"].max()
-            breakout_ratio = (last["Close"] - resistance) / atr_val if atr_val and not pd.isna(atr_val) and atr_val != 0 else 0
+            resistance_window = data.iloc[-61:-1] if len(data) > 60 else data.iloc[:-1]
+            resistance = resistance_window["High"].max() if not resistance_window.empty else np.nan
+            breakout_ratio = (last["Close"] - resistance) / atr_val if atr_val and not pd.isna(atr_val) and atr_val != 0 and not pd.isna(resistance) else 0
             adx_val = last.get("ADX", np.nan)
             above_vwap = (not pd.isna(last.get("VWAP", np.nan))) and last["Close"] > last["VWAP"]
             swing_brk = detect_swing_trendline_break(data)
@@ -873,22 +1149,34 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
             trade_signal = compute_trade_signal(data)["signal"]
             pullback_os_signal = compute_strategy_pullback_oversold(data)["signal"]
             pullback_trend_signal = compute_strategy_trend_pullback(data)["signal"]
+            turtle_signal = compute_strategy_turtle_breakout(data)["signal"]
+
+            ref_index = get_reference_index(ticker)
+            if ref_index is not None:
+                if ref_index not in regime_cache:
+                    regime_cache[ref_index] = compute_market_regime(ref_index)
+                market_regime = regime_cache[ref_index]
+            else:
+                market_regime = None
 
             results.append({
                 "Ticker": ticker,
                 "Timeframe": timeframe_label,
                 "Prezzo": round(last["Close"], 2),
                 "Score": score,
+                "Score V4": compute_score_v4(data),
                 "Segnale": trade_signal,
                 "Rottura+Momentum Basso": pullback_os_signal,
                 "Pullback Trend": pullback_trend_signal,
+                "Turtle Breakout": turtle_signal,
                 "RSI": round(last["RSI"], 2),
                 "MACD": round(last["MACD"], 4),
                 "ATR": round(atr_val, 4) if not pd.isna(atr_val) else None,
                 "Breakout Ratio": round(breakout_ratio, 2),
                 "ADX": round(adx_val, 1) if not pd.isna(adx_val) else None,
                 "Rottura Trendline": trendline_flag,
-                "Sopra VWAP": "✔️" if above_vwap else ""
+                "Sopra VWAP": "✔️" if above_vwap else "",
+                "Regime Mercato": market_regime or "n/d"
             })
 
         except Exception as e:
@@ -1055,6 +1343,37 @@ def compute_strategy_trend_pullback(data, pullback_tolerance=0.015):
 # BACKTEST GENERICO PER UNA STRATEGIA DI SOLO ACQUISTO
 # ==========================
 
+# ==========================
+# STRATEGIA: STOCASTICO 10-3-6 BASSO CON CONFERMA RSI
+# ==========================
+# ==========================
+# STRATEGIA: TURTLE TRADING (DONCHIAN CHANNEL BREAKOUT)
+# ==========================
+# Sistema storico reale (anni '80, Richard Dennis): compra la rottura
+# del massimo delle ultime N giornate (default 20, il "Sistema 1"
+# originale). A differenza delle altre strategie, non usa trend line
+# sui pivot: la resistenza è semplicemente il canale di Donchian, il
+# massimo puro degli ultimi N giorni PRIMA di oggi (stesso principio
+# del bugfix già applicato a breakout_score_advanced: la resistenza
+# non deve includere il giorno stesso di oggi). Versione semplificata
+# rispetto all'originale: manca il filtro "salta il trade se l'ultimo
+# breakout era stato vincente" del sistema Turtle reale.
+
+def compute_strategy_turtle_breakout(data, entry_period=20):
+    if len(data) <= entry_period:
+        return {"signal": "NEUTRALE", "conditions": [("Storico sufficiente per il canale di Donchian", False)]}
+
+    last_close = data["Close"].iloc[-1]
+    donchian_high = data["High"].iloc[-(entry_period + 1):-1].max()  # esclude oggi
+
+    conditions = [
+        (f"Chiusura sopra il massimo dei {entry_period} giorni precedenti (Donchian={round(donchian_high,2)})",
+         bool(last_close > donchian_high)),
+    ]
+
+    signal = "ACQUISTO" if all(met for _, met in conditions) else "NEUTRALE"
+    return {"signal": signal, "conditions": conditions, "donchian_high": donchian_high}
+
 def backtest_strategy_signal(data, strategy_fn, forward_days=(5, 10, 20), min_history=200):
     """Walk-forward generico: ogni giorno vede solo il passato, applica
     `strategy_fn` (una delle funzioni compute_strategy_*) e, se dà
@@ -1181,6 +1500,93 @@ def backtest_strategy_sl_tp(data, strategy_fn, atr_sl_mult=1.5, atr_tp_mult=3.0,
 
     return trades
 
+# ==========================
+# BACKTEST CON STOP LOSS DINAMICO (SUPERTREND) — variante di quello sopra
+# ==========================
+# Stessa logica di ingresso/take profit del backtest sopra, ma lo stop
+# loss non è più fisso al multiplo di ATR: segue il Supertrend, che si
+# stringe verso l'alto mano a mano che il trend si sviluppa (o esce
+# subito se il Supertrend "flippa" da rialzista a ribassista). L'idea è
+# lasciare correre i guadagni invece di uscire sempre alla stessa
+# distanza fissa dall'ingresso.
+
+def backtest_strategy_sl_tp_supertrend(data, strategy_fn, atr_tp_mult=3.0,
+                                        supertrend_period=10, supertrend_multiplier=3.0,
+                                        max_holding_days=20, min_history=200):
+    data_ind = compute_indicators(data)
+    data_st = compute_supertrend(data_ind, period=supertrend_period, multiplier=supertrend_multiplier)
+    atr_series = compute_atr(data_ind)
+    n = len(data_ind)
+    trades = []
+
+    for i in range(min_history, n):
+        window = data_ind.iloc[:i + 1]
+        if len(window) < 90:
+            continue
+
+        result = strategy_fn(window)
+        if result.get("signal") != "ACQUISTO":
+            continue
+
+        entry_price = data_ind["Close"].iloc[i]
+        atr_val = atr_series.iloc[i]
+        if pd.isna(atr_val) or atr_val <= 0:
+            continue
+
+        initial_stop = data_st["Supertrend"].iloc[i]
+        if pd.isna(initial_stop) or initial_stop >= entry_price:
+            continue  # Supertrend non valido o già ribassista: nessun rischio ben definito
+        risk_per_share = entry_price - initial_stop
+        if risk_per_share <= 0:
+            continue
+
+        target_price = entry_price + atr_tp_mult * atr_val
+
+        outcome, exit_price, days_held = None, None, None
+
+        for offset in range(1, max_holding_days + 1):
+            j = i + offset
+            if j >= n:
+                break
+            day_high = data_ind["High"].iloc[j]
+            day_low = data_ind["Low"].iloc[j]
+            st_value = data_st["Supertrend"].iloc[j]
+            st_direction = data_st["Supertrend_Direction"].iloc[j]
+
+            hit_tp = day_high >= target_price
+            # stop dinamico: il trend è "flippato" ribassista, oppure il
+            # prezzo ha rotto sotto la linea del Supertrend di oggi
+            flipped_bearish = (not pd.isna(st_direction)) and st_direction == -1
+            broke_below = (not pd.isna(st_value)) and day_low <= st_value
+            hit_trailing_stop = flipped_bearish or broke_below
+
+            if hit_trailing_stop:  # priorità allo stop, stesso criterio prudente del backtest fisso
+                outcome = "stop_loss"
+                exit_price = st_value if not pd.isna(st_value) else data_ind["Close"].iloc[j]
+                days_held = offset
+                break
+            elif hit_tp:
+                outcome, exit_price, days_held = "take_profit", target_price, offset
+                break
+
+        if outcome is None:
+            j = min(i + max_holding_days, n - 1)
+            if j <= i:
+                continue
+            outcome = "timeout"
+            exit_price = data_ind["Close"].iloc[j]
+            days_held = j - i
+
+        r_multiple = (exit_price - entry_price) / risk_per_share
+        trades.append({
+            "date": window.index[-1],
+            "outcome": outcome,
+            "r_multiple": r_multiple,
+            "days_held": days_held,
+        })
+
+    return trades
+
 def summarize_sl_tp_backtest(trades_by_ticker):
     all_trades = []
     for per_ticker in trades_by_ticker.values():
@@ -1190,6 +1596,7 @@ def summarize_sl_tp_backtest(trades_by_ticker):
         return {
             "Trade totali": 0, "Take Profit %": None, "Stop Loss %": None, "Timeout %": None,
             "R medio": None, "Profit Factor": None, "Giorni medi in trade": None,
+            "Drawdown massimo (R)": None, "Perdite consecutive max": None,
         }
 
     n_trades = len(all_trades)
@@ -1201,6 +1608,31 @@ def summarize_sl_tp_backtest(trades_by_ticker):
     gross_win = sum(r for r in r_values if r > 0)
     gross_loss = -sum(r for r in r_values if r < 0)
 
+    # Drawdown massimo e perdite consecutive: calcolati mettendo in fila
+    # TUTTI i trade (di qualsiasi titolo) ordinati per data di ingresso, come
+    # se fossero un'unica sequenza di operazioni. È una semplificazione (se
+    # due titoli segnalano lo stesso giorno, in realtà li apriresti insieme,
+    # non in sequenza), ma dà comunque un'idea concreta della "peggiore
+    # striscia" che il sistema ha attraversato nel periodo testato.
+    sorted_trades = sorted(all_trades, key=lambda t: t["date"])
+
+    cum_r = 0.0
+    peak_r = 0.0
+    max_drawdown = 0.0
+    for t in sorted_trades:
+        cum_r += t["r_multiple"]
+        peak_r = max(peak_r, cum_r)
+        max_drawdown = max(max_drawdown, peak_r - cum_r)
+
+    max_consecutive_losses = 0
+    current_streak = 0
+    for t in sorted_trades:
+        if t["r_multiple"] < 0:
+            current_streak += 1
+            max_consecutive_losses = max(max_consecutive_losses, current_streak)
+        else:
+            current_streak = 0
+
     return {
         "Trade totali": n_trades,
         "Take Profit %": round(len(wins) / n_trades * 100, 1),
@@ -1209,6 +1641,8 @@ def summarize_sl_tp_backtest(trades_by_ticker):
         "R medio": round(float(np.mean(r_values)), 2),
         "Profit Factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
         "Giorni medi in trade": round(float(np.mean([t["days_held"] for t in all_trades])), 1),
+        "Drawdown massimo (R)": round(max_drawdown, 2),
+        "Perdite consecutive max": max_consecutive_losses,
     }
 
 def backtest_trade_signal(data, thresholds=(2, 3, 4), forward_days=(5, 10, 20), min_history=200):

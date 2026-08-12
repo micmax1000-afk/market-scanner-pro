@@ -186,7 +186,32 @@ with tab3:
         else:
             data = compute_indicators(data)
             score = compute_score(data)
-            st.metric("Score Finale Pesato V3", f"{score}/100")
+            score_v4 = compute_score_v4(data)
+
+            col_v3, col_v4 = st.columns(2)
+            with col_v3:
+                st.metric("Score V3 (attuale)", f"{score}/100")
+            with col_v4:
+                delta = round(score_v4 - score, 1)
+                st.metric("Score V4 (sperimentale)", f"{score_v4}/100", delta=delta)
+            st.caption(
+                "Lo Score V4 consolida 4 componenti dello V3 che misuravano tutte, da "
+                "angolazioni diverse, la stessa 'forza del trend' (allineamento EMA, "
+                "pendenza, rottura trend line, ADX) in una sola misura, e ridistribuisce "
+                "il peso liberato su volume/breakout/Bollinger. Se i due punteggi divergono "
+                "molto, probabilmente il titolo deve gran parte del suo Score V3 alla "
+                "ripetizione dello stesso segnale di trend, non a conferme indipendenti."
+            )
+
+            ref_index = get_reference_index(ticker)
+            if ref_index is not None:
+                market_regime = compute_market_regime(ref_index)
+                if market_regime == "Rialzista":
+                    st.caption(f"🌍 Regime di mercato ({ref_index}): 🟢 Rialzista — sopra la media mobile a 200gg")
+                elif market_regime == "Ribassista":
+                    st.caption(f"🌍 Regime di mercato ({ref_index}): 🔴 Ribassista — sotto la media mobile a 200gg. Informativo: comprare rialzi controcorrente è statisticamente meno affidabile, ma non è un blocco automatico.")
+                else:
+                    st.caption(f"🌍 Regime di mercato ({ref_index}): n/d (dati insufficienti)")
 
             st.subheader("🚦 Segnale (rottura trend line + conferme)")
             trade = compute_trade_signal(data)
@@ -226,6 +251,16 @@ with tab3:
             for desc, met in pullback_trend["conditions"]:
                 st.write(f"{'✅' if met else '❌'} {desc}")
 
+            st.subheader("🐢 Strategia: Turtle Trading (Donchian Breakout)")
+            st.caption("⚠️ Non ancora collegata agli alert: testala con il Backtest SL/TP prima.")
+            turtle = compute_strategy_turtle_breakout(data)
+            if turtle["signal"] == "ACQUISTO":
+                st.success("📈 ACQUISTO — rottura del canale di Donchian")
+            else:
+                st.info("⏸️ Nessuna rottura")
+            for desc, met in turtle["conditions"]:
+                st.write(f"{'✅' if met else '❌'} {desc}")
+
 # --------------------------
 # TAB 4: SCANNER
 # --------------------------
@@ -253,6 +288,26 @@ with tab4:
 
     st.caption(f"{len(scan_tickers)} ticker selezionati, su {len(scan_timeframes) or 0} timeframe.")
 
+    with st.expander("⚙️ Sensibilità dei filtri (di default già allentati rispetto all'originale)"):
+        st.caption(
+            "Con tutti e 7 i filtri obbligatori insieme, lo scanner può dare spesso tabella "
+            "vuota su un universo piccolo: qui puoi allentare o restringere le tre soglie più "
+            "severe. Valori più alti/permissivi = più titoli passano; valori originali stretti "
+            "(volatilità 4%, volume 1.2x, breakout 0.5x ATR) = meno titoli ma più selettivi."
+        )
+        max_volatility_pct = st.slider(
+            "Volatilità massima 20gg consentita (%)", min_value=2, max_value=15, value=8, step=1,
+            key="scan_max_volatility"
+        )
+        min_volume_ratio = st.slider(
+            "Volume minimo richiesto (x media 20gg)", min_value=0.8, max_value=2.0, value=1.0, step=0.1,
+            key="scan_min_volume_ratio"
+        )
+        min_breakout_ratio = st.slider(
+            "Breakout minimo richiesto (x ATR sopra il massimo 60gg)", min_value=0.0, max_value=1.5, value=0.2, step=0.1,
+            key="scan_min_breakout_ratio"
+        )
+
     if st.button("Avvia Scanner V2"):
         if not scan_tickers:
             st.warning("Seleziona almeno un universo di titoli.")
@@ -268,7 +323,10 @@ with tab4:
                         tickers=scan_tickers,
                         interval=tf["interval"],
                         period=scan_period,
-                        timeframe_label=tf_label
+                        timeframe_label=tf_label,
+                        max_volatility=max_volatility_pct / 100,
+                        min_volume_ratio=min_volume_ratio,
+                        min_breakout_ratio=min_breakout_ratio
                     )
                 if not df_tf.empty:
                     all_results.append(df_tf)
@@ -292,6 +350,109 @@ with tab4:
                 st.warning("Nessun titolo disponibile per Scanner V3.")
             else:
                 st.dataframe(df3, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("🏆 Momentum Ranking (fattore stile fondi sistematici)")
+    st.caption(
+        "A differenza dello Scanner sopra (segnale sì/no sul singolo titolo), qui classifica "
+        "TUTTO l'universo scelto per rendimento storico e mostra i migliori — è il fattore "
+        "'momentum' usato su vasta scala da fondi sistematici (senza il position sizing e la "
+        "gestione del rischio che loro applicano in più: qui è solo il ranking di base)."
+    )
+
+    momentum_source = st.selectbox(
+        "Fonte dati",
+        ["yfinance (locale, funziona subito)", "Twelve Data via Worker Cloudflare (metodologia 12-1, richiede setup)"],
+        key="momentum_source"
+    )
+
+    momentum_universe = st.multiselect(
+        "Universo da classificare",
+        ["Azioni Italiane", "Indici Americani", "Indici Europei"],
+        default=["Azioni Italiane"],
+        key="momentum_universe"
+    )
+
+    if momentum_source.startswith("yfinance"):
+        momentum_lookback = st.selectbox(
+            "Periodo di lookback",
+            [("1 mese (~21gg)", 21), ("3 mesi (~63gg)", 63), ("6 mesi (~126gg)", 126), ("12 mesi (~252gg)", 252)],
+            format_func=lambda x: x[0],
+            index=2,
+            key="momentum_lookback"
+        )
+
+        if st.button("Calcola Momentum Ranking"):
+            momentum_tickers = list(dict.fromkeys(t for cat in momentum_universe for t in TICKER_CATALOG[cat].values()))
+            if not momentum_tickers:
+                st.warning("Seleziona almeno un universo di titoli.")
+            else:
+                with st.spinner(f"Calcolo ranking su {len(momentum_tickers)} titoli..."):
+                    df_momentum = compute_momentum_ranking(momentum_tickers, lookback_days=momentum_lookback[1])
+                if df_momentum.empty:
+                    st.warning("Dati insufficienti per calcolare il ranking su questo universo/periodo.")
+                else:
+                    st.dataframe(df_momentum, use_container_width=True, hide_index=True)
+                    st.caption(
+                        "I titoli in cima hanno avuto il rendimento migliore nel periodo scelto. "
+                        "Il fattore momentum scommette che chi ha performato meglio di recente "
+                        "tenda a continuare nel breve-medio termine — non è garantito, e funziona "
+                        "in media su portafogli diversificati, non sul singolo titolo isolato."
+                    )
+    else:
+        st.caption(
+            "Usa la metodologia 'momentum 12-1' (Jegadeesh-Titman): salta l'ultimo mese prima "
+            "di misurare il rendimento, per evitare l'effetto di reversal a breve termine. "
+            "⚠️ ATTENZIONE: Twelve Data potrebbe usare un formato ticker diverso da yfinance "
+            "(es. senza '.MI' per le azioni italiane, o simboli diversi per gli indici) — se "
+            "vedi errori 'Storico insufficiente' per molti titoli, controlla il formato dei "
+            "simboli sulla documentazione di Twelve Data. Il primo calcolo della giornata può "
+            "richiedere alcuni minuti (piano gratuito limitato a 8 richieste/minuto); le "
+            "successive nello stesso giorno sono quasi istantanee grazie alla cache."
+        )
+        worker_url_input = st.text_input(
+            "URL del Worker Cloudflare",
+            value=MOMENTUM_WORKER_URL or "",
+            placeholder="https://momentum-ranking.tuonome.workers.dev",
+            key="momentum_worker_url"
+        )
+        col_lb, col_skip = st.columns(2)
+        with col_lb:
+            momentum_lookback_worker = st.number_input("Lookback (giorni)", min_value=21, max_value=504, value=126, step=21, key="momentum_lookback_worker")
+        with col_skip:
+            momentum_skip_recent = st.number_input("Salta ultimi (giorni)", min_value=0, max_value=63, value=21, step=7, key="momentum_skip_recent")
+
+        if st.button("Calcola Momentum Ranking (Worker)"):
+            momentum_tickers = list(dict.fromkeys(t for cat in momentum_universe for t in TICKER_CATALOG[cat].values()))
+            if not momentum_tickers:
+                st.warning("Seleziona almeno un universo di titoli.")
+            elif not worker_url_input:
+                st.warning("Inserisci l'URL del Worker (o impostalo come Secret MOMENTUM_WORKER_URL).")
+            else:
+                with st.spinner(
+                    f"Calcolo ranking su {len(momentum_tickers)} titoli via Twelve Data "
+                    f"(può richiedere qualche minuto se non in cache)..."
+                ):
+                    try:
+                        df_momentum_w = compute_momentum_ranking_worker(
+                            momentum_tickers, worker_url_input,
+                            lookback_days=int(momentum_lookback_worker),
+                            skip_recent_days=int(momentum_skip_recent)
+                        )
+                    except Exception as e:
+                        st.error(f"Errore nella chiamata al Worker: {e}")
+                        df_momentum_w = None
+
+                if df_momentum_w is not None:
+                    if df_momentum_w.empty:
+                        st.warning("Nessun risultato valido. Controlla il formato dei ticker per Twelve Data.")
+                    else:
+                        st.dataframe(df_momentum_w, use_container_width=True, hide_index=True)
+                        st.caption(
+                            "'Percentile' = posizione relativa nel ranking (100 = il migliore "
+                            "dell'universo, 0 = il peggiore). Rendimento calcolato saltando gli "
+                            "ultimi giorni scelti per evitare il reversal a breve termine."
+                        )
 
     st.subheader("📊 Importanza delle Feature (Scanner V3)")
 
@@ -429,7 +590,7 @@ with tab5:
 
     sl_tp_strategy_choice = st.selectbox(
         "Strategia da testare",
-        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)"],
+        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)", "Turtle Trading (Donchian Breakout)"],
         key="sl_tp_strategy_choice"
     )
     sl_tp_universe = st.multiselect(
@@ -455,8 +616,10 @@ with tab5:
                 strategy_fn = lambda d: compute_trade_signal(d, min_confirmations=3)
             elif sl_tp_strategy_choice == "Rottura resistenza + momentum basso (la tua)":
                 strategy_fn = compute_strategy_pullback_oversold
-            else:
+            elif sl_tp_strategy_choice == "Pullback trend EMA20 (proposta)":
                 strategy_fn = compute_strategy_trend_pullback
+            else:
+                strategy_fn = compute_strategy_turtle_breakout
 
             trades_by_ticker = {}
             progress = st.progress(0.0)
@@ -496,7 +659,168 @@ with tab5:
                     "'R medio' = guadagno/perdita medio per trade espresso in multipli del "
                     "rischio (1R = distanza tra ingresso e stop loss). Un R medio positivo con "
                     "Profit Factor > 1 significa che i guadagni superano le perdite in totale, "
-                    "non solo che vinci più spesso di quanto perdi."
+                    "non solo che vinci più spesso di quanto perdi. 'Drawdown massimo (R)' e "
+                    "'Perdite consecutive max' dicono invece quanto puoi 'soffrire' nel mezzo, "
+                    "anche in un sistema profittevole in media."
+                )
+
+    st.markdown("---")
+    st.subheader("⚖️ Confronta tutte e tre le strategie (stessi parametri SL/TP)")
+    st.caption(
+        "Testa il segnale combinato e le due strategie di solo acquisto con gli stessi "
+        "Stop Loss/Take Profit/universo, scaricando i dati di ogni titolo una sola volta "
+        "(non tre), e le mette in ordine dalla più alla meno profittevole per Profit Factor."
+    )
+
+    compare_universe = st.multiselect(
+        "Universo per il confronto",
+        ["Azioni Italiane", "Indici Americani", "Indici Europei"],
+        default=["Azioni Italiane"],
+        key="compare_universe"
+    )
+    col_csl, col_ctp, col_chold = st.columns(3)
+    with col_csl:
+        compare_sl = st.number_input("Stop Loss (x ATR)", min_value=0.5, max_value=5.0, value=1.5, step=0.25, key="compare_sl")
+    with col_ctp:
+        compare_tp = st.number_input("Take Profit (x ATR)", min_value=0.5, max_value=10.0, value=3.0, step=0.25, key="compare_tp")
+    with col_chold:
+        compare_hold = st.number_input("Giorni massimi in trade", min_value=5, max_value=60, value=20, step=5, key="compare_hold")
+
+    if st.button("Confronta le 3 strategie"):
+        tickers_cmp = list(dict.fromkeys(t for cat in compare_universe for t in TICKER_CATALOG[cat].values()))
+        if not tickers_cmp:
+            st.warning("Seleziona almeno un universo di titoli.")
+        else:
+            strategies = {
+                "Segnale combinato (rottura + conferme)": lambda d: compute_trade_signal(d, min_confirmations=3),
+                "Rottura resistenza + momentum basso (la tua)": compute_strategy_pullback_oversold,
+                "Pullback trend EMA20 (proposta)": compute_strategy_trend_pullback,
+                "Turtle Trading (Donchian Breakout)": compute_strategy_turtle_breakout,
+            }
+            trades_by_strategy = {name: {} for name in strategies}
+
+            progress = st.progress(0.0)
+            for idx, tkr in enumerate(tickers_cmp):
+                try:
+                    hist = download_data(tkr, period="2y", interval="1d")
+                    if not hist.empty and len(hist) >= 250:
+                        for name, fn in strategies.items():
+                            trades_by_strategy[name][tkr] = backtest_strategy_sl_tp(
+                                hist, fn,
+                                atr_sl_mult=compare_sl, atr_tp_mult=compare_tp, max_holding_days=int(compare_hold)
+                            )
+                except Exception as e:
+                    print(f"Errore confronto strategie su {tkr}: {e}")
+                progress.progress((idx + 1) / len(tickers_cmp))
+
+            rows = []
+            for name in strategies:
+                s = summarize_sl_tp_backtest(trades_by_strategy[name])
+                s["Strategia"] = name
+                rows.append(s)
+
+            comparison_df = pd.DataFrame(rows)[
+                ["Strategia", "Trade totali", "Take Profit %", "Stop Loss %", "Timeout %",
+                 "R medio", "Profit Factor", "Drawdown massimo (R)", "Perdite consecutive max",
+                 "Giorni medi in trade"]
+            ]
+            comparison_df = comparison_df.sort_values(
+                "Profit Factor", ascending=False, na_position="last"
+            )
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            st.caption(
+                "'Drawdown massimo (R)' = la peggiore serie di perdite non ancora recuperate, "
+                "mettendo in fila tutti i trade per data (approssimazione: se più titoli segnalano "
+                "lo stesso giorno, in realtà li apriresti insieme, non in sequenza). "
+                "'Perdite consecutive max' = quante sconfitte di fila ha attraversato il sistema "
+                "nel periodo testato: utile per capire cosa aspettarsi psicologicamente, anche in "
+                "un sistema che alla fine è profittevole."
+            )
+
+            valid_rows = comparison_df.dropna(subset=["Profit Factor"])
+            if not valid_rows.empty:
+                best = valid_rows.iloc[0]
+                st.info(
+                    f"In questo universo e periodo, **{best['Strategia']}** ha il Profit Factor "
+                    f"più alto ({best['Profit Factor']}) su {int(best['Trade totali'])} trade. "
+                    f"Con un campione piccolo questo può cambiare cambiando universo o parametri: "
+                    f"prova a ripetere il confronto su un altro sottoinsieme di titoli prima di "
+                    f"fidartene."
+                )
+            else:
+                st.warning("Nessuna strategia ha generato trade sufficienti in questo universo/periodo.")
+
+    st.markdown("---")
+    st.subheader("🔀 Backtest con Stop Loss dinamico (Supertrend)")
+    st.caption(
+        "Stessa logica di ingresso/take profit del backtest SL/TP sopra, ma lo stop non è "
+        "più fisso: segue il Supertrend, che si stringe verso l'alto mano a mano che il trend "
+        "si sviluppa (esce anche se il Supertrend 'flippa' da rialzista a ribassista). L'idea "
+        "è lasciare correre i guadagni invece di uscire sempre alla stessa distanza fissa "
+        "dall'ingresso. Confronta il Profit Factor con quello del backtest a stop fisso sopra."
+    )
+
+    st_strategy_choice = st.selectbox(
+        "Strategia da testare",
+        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)", "Turtle Trading (Donchian Breakout)"],
+        key="st_strategy_choice"
+    )
+    st_universe = st.multiselect(
+        "Universo per il backtest",
+        ["Azioni Italiane", "Indici Americani", "Indici Europei"],
+        default=["Azioni Italiane"],
+        key="st_universe"
+    )
+    col_sttp, col_stperiod, col_stmult, col_sthold = st.columns(4)
+    with col_sttp:
+        st_tp_mult = st.number_input("Take Profit (x ATR)", min_value=0.5, max_value=10.0, value=3.0, step=0.25, key="st_tp_mult")
+    with col_stperiod:
+        st_period = st.number_input("Periodo Supertrend", min_value=5, max_value=30, value=10, step=1, key="st_period")
+    with col_stmult:
+        st_mult = st.number_input("Moltiplicatore Supertrend (x ATR)", min_value=1.0, max_value=6.0, value=3.0, step=0.5, key="st_mult")
+    with col_sthold:
+        st_max_hold = st.number_input("Giorni massimi in trade", min_value=5, max_value=60, value=20, step=5, key="st_max_hold")
+
+    if st.button("Esegui Backtest Supertrend"):
+        tickers_st = list(dict.fromkeys(t for cat in st_universe for t in TICKER_CATALOG[cat].values()))
+        if not tickers_st:
+            st.warning("Seleziona almeno un universo di titoli.")
+        else:
+            if st_strategy_choice == "Segnale combinato (rottura + conferme)":
+                st_strategy_fn = lambda d: compute_trade_signal(d, min_confirmations=3)
+            elif st_strategy_choice == "Rottura resistenza + momentum basso (la tua)":
+                st_strategy_fn = compute_strategy_pullback_oversold
+            elif st_strategy_choice == "Pullback trend EMA20 (proposta)":
+                st_strategy_fn = compute_strategy_trend_pullback
+            else:
+                st_strategy_fn = compute_strategy_turtle_breakout
+
+            trades_by_ticker_st = {}
+            progress = st.progress(0.0)
+            for idx, tkr in enumerate(tickers_st):
+                try:
+                    hist = download_data(tkr, period="2y", interval="1d")
+                    if not hist.empty and len(hist) >= 250:
+                        trades_by_ticker_st[tkr] = backtest_strategy_sl_tp_supertrend(
+                            hist, st_strategy_fn,
+                            atr_tp_mult=st_tp_mult, supertrend_period=int(st_period),
+                            supertrend_multiplier=st_mult, max_holding_days=int(st_max_hold)
+                        )
+                except Exception as e:
+                    print(f"Errore backtest Supertrend su {tkr}: {e}")
+                progress.progress((idx + 1) / len(tickers_st))
+
+            summary_st = summarize_sl_tp_backtest(trades_by_ticker_st)
+            st.write(summary_st)
+
+            if summary_st["Trade totali"] == 0:
+                st.warning("Nessun segnale trovato in questo universo/periodo.")
+            else:
+                st.caption(
+                    "Confronta 'Profit Factor' e 'Drawdown massimo (R)' con lo stesso "
+                    "backtest a stop fisso qui sopra sulla stessa strategia/universo: se lo "
+                    "stop dinamico fa meglio su entrambi, è un miglioramento robusto; se "
+                    "migliora uno e peggiora l'altro, è un trade-off da valutare."
                 )
 
     st.subheader("Backtest dei Breakout")

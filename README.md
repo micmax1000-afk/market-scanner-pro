@@ -350,3 +350,223 @@ strategie di solo acquisto), su qualunque universo di titoli.
   totale — è la metrica che conta davvero, non solo la percentuale di
   trade vincenti.
 - Take Profit % + Stop Loss % + Timeout % sommano sempre a 100.
+
+## Regime di mercato (informativo)
+
+Ogni titolo può dare un segnale tecnico valido sul proprio grafico e
+comunque muoversi contro l'onda di fondo se il mercato generale è in
+un trend ribassista. Per questo, Scanner V2, tab Score e alert
+Telegram mostrano ora una colonna/riga **"Regime Mercato"**:
+confronta l'indice di riferimento del titolo con la propria media
+mobile a 200 giorni.
+
+- Azioni Italiane → confrontate con **FTSE MIB**
+- Indici Americani → confrontati con **S&P 500**
+- Indici Europei → confrontati con **Euro Stoxx 50**
+- Ticker personalizzati non riconosciuti → "n/d" (nessun riferimento)
+
+**È solo informativo: NON blocca né filtra automaticamente nessun
+segnale.** Serve a dare un contesto in più prima di decidere: un
+segnale di acquisto durante un regime "Ribassista" non è per forza
+sbagliato, ma storicamente comprare rialzi in un mercato generale in
+discesa è statisticamente meno affidabile.
+
+## Bugfix importante: il filtro/score "Breakout" non funzionava mai
+
+Trovato mentre allentavo le soglie dei filtri: `filter_breakout` e
+`breakout_score_advanced` calcolavano la "resistenza" come il massimo
+dei 60 giorni **incluso oggi**. Ma il massimo (`High`) di oggi è per
+definizione sempre ≥ della chiusura (`Close`) di oggi — quindi il
+rapporto breakout non poteva quasi mai essere positivo, qualunque
+fosse la soglia impostata. Su un test con 140 finestre storiche
+diverse, è risultato positivo **zero volte**.
+
+Questo toccava contemporaneamente:
+- Il filtro breakout dello Scanner V2 (mai passato)
+- Il 13% del peso dello Score Finale Pesato V3 (componente sempre a 0)
+- La condizione "breakout forte" negli alert Telegram (mai scattata)
+- La colonna "Breakout Ratio" mostrata nella tabella (sempre negativa)
+
+**Corretto**: ora la resistenza è calcolata sui 60 giorni **prima**
+di oggi (escludendo oggi), poi si confronta la chiusura di oggi con
+quel livello — esattamente come già faceva correttamente
+`backtest_breakouts()` (verificato che dopo il fix i due calcoli
+concordano).
+
+## Soglie dei filtri allentate (Scanner V2)
+
+Con tutti e 7 i filtri obbligatori insieme, la probabilità che un
+titolo li soddisfi *tutti* contemporaneamente crolla velocemente, in
+particolare su un universo piccolo come le Azioni Italiane. Tre soglie
+sono state allentate rispetto ai valori originali, e sono ora anche
+configurabili nell'app (Scanner V2 → "⚙️ Sensibilità dei filtri"):
+
+| Filtro | Valore originale | Nuovo default |
+|---|---|---|
+| Volatilità massima 20gg | 4% | 8% |
+| Volume minimo richiesto | 1.2x media | 1.0x media |
+| Breakout minimo richiesto | 0.5x ATR | 0.2x ATR |
+
+`scheduled_scan.py` (gli scanner automatici Lun-Ven) eredita
+automaticamente questi nuovi default senza bisogno di modifiche.
+
+## Score V4 (sperimentale): consolida la ridondanza del trend
+
+Nello Score V3, 4 componenti su 11 misuravano tutte, da angolazioni
+diverse, la stessa "forza del trend" (allineamento EMA, pendenza della
+regressione a 60gg, rottura della trend line sui pivot, ADX) — insieme
+pesavano il **42%** dello score finale. Un titolo in trend pulito
+guadagnava punti 4 volte per lo stesso fenomeno.
+
+Lo **Score V4** le consolida in un'unica componente "forza del trend"
+(media delle 4 normalizzate), e ridistribuisce il peso liberato su
+volume, breakout e Bollinger — dimensioni più indipendenti dal trend
+puro. Non sostituisce lo Score V3 (rimasto identico ovunque
+nell'app): compare **affiancato**, per confronto:
+
+- **Tab Score**: entrambi i punteggi con la differenza (delta)
+- **Scanner V2**: colonna "Score V4" accanto a "Score"
+
+**Come interpretarlo**: se i due punteggi divergono molto per un
+titolo (V3 alto, V4 più basso), probabilmente quel titolo deve gran
+parte del suo Score V3 alla ripetizione dello stesso segnale di trend
+(allineamento EMA + pendenza + rottura pivot + ADX, tutti concordi),
+non a conferme davvero indipendenti come volume o breakout.
+
+Verificato con un caso costruito ad hoc: un titolo con trend
+perfettamente pulito ma volume piatto e nessun breakout ottiene
+Score V3 più alto dello Score V4, confermando che V3 sovrappesa la
+ripetizione del segnale di trend.
+
+## Alert Telegram ristretti alle sole strategie testate
+
+L'alert Telegram (`send_alert_v2`) ora scatta **solo** per una di
+queste 3 condizioni, tutte testate con backtest (SL/TP, R medio,
+Profit Factor, drawdown):
+
+1. Segnale ACQUISTO/VENDITA combinato (rottura trend line + conferme)
+2. Strategia "Rottura resistenza + momentum basso"
+3. Strategia "Pullback trend EMA20"
+
+Le 8 condizioni "grezze" precedenti (Score ≥75, Breakout ATR, Volume
+Spike, pendenza Trendline, incrocio Stocastico, ADX forte, rottura
+senza conferme) **non fanno più scattare l'alert da sole** — non erano
+mai state testate individualmente con un backtest e generavano troppo
+rumore. Restano comunque visibili nel corpo del messaggio come
+contesto, quando arriva un alert per una delle 3 strategie vere.
+
+Risultato pratico: meno alert, ma tutti riconducibili a qualcosa di
+concretamente misurato.
+
+## Strategia rimossa: Stocastico basso con conferma RSI
+
+Aggiunta e poi rimossa su richiesta: sui primi test (dati sintetici)
+dava Profit Factor sotto 1, ed essendo un segnale di ipervenduto
+"puro" senza nessun contesto di trend, era coerente con quanto
+osservato altrove nel progetto — le strategie che richiedono un trend
+di fondo confermato tendono a reggere meglio di quelle puramente
+contrarian. Il codice è stato tolto da `core.py` e da tutte le sezioni
+dell'app.
+
+## Supertrend come stop loss dinamico (trailing)
+
+Nuova sezione in tab Backtest: **"🔀 Backtest con Stop Loss dinamico
+(Supertrend)"**. Stessa logica di ingresso/take profit del backtest
+SL/TP normale, ma lo stop loss non è più fisso a un multiplo di ATR
+dall'ingresso: segue il Supertrend, un indicatore trend-following
+basato sull'ATR che si stringe verso l'alto mano a mano che il trend
+si sviluppa (o esce subito se il Supertrend "flippa" da rialzista a
+ribassista). L'idea è lasciare correre i guadagni invece di uscire
+sempre alla stessa distanza fissa dall'ingresso.
+
+Funziona con qualunque delle tre strategie di solo acquisto, con
+parametri configurabili (periodo e moltiplicatore del Supertrend,
+take profit, giorni massimi in trade). Usa lo stesso riepilogo (R
+medio, Profit Factor, Drawdown massimo, Perdite consecutive) del
+backtest SL/TP normale, per un confronto diretto tra i due approcci
+sulla stessa strategia/universo.
+
+**Bugfix durante lo sviluppo**: la prima versione del calcolo
+ricorsivo delle bande del Supertrend restava bloccata su valori NaN
+per sempre una volta incontrato un NaN durante il riscaldamento
+dell'ATR (le prime ~10-14 barre) — non si aggiornava mai più,
+lasciando la direzione sempre "ribassista". Corretto con
+un'inizializzazione esplicita ("bootstrap") delle bande quando il
+valore precedente è ancora NaN.
+
+Nota: Supertrend è usato **solo** come meccanismo di stop dinamico
+nel backtest, non come segnale di ingresso a sé stante — l'ingresso
+resta deciso dalle tre strategie esistenti.
+
+## Turtle Trading (Donchian Channel Breakout)
+
+Sistema storico reale (anni '80, Richard Dennis): compra la rottura
+del massimo delle ultime N giornate (default 20). A differenza delle
+altre strategie, la resistenza non è una trend line sui pivot ma il
+puro canale di Donchian — il massimo assoluto degli N giorni PRIMA di
+oggi (stesso principio del bugfix già applicato in precedenza al
+breakout score: la resistenza esclude sempre il giorno corrente).
+
+Versione semplificata rispetto all'originale: manca il filtro storico
+"salta il trade se l'ultimo breakout era stato vincente" del sistema
+Turtle reale.
+
+**Non ancora collegata agli alert Telegram** (come le altre nuove
+finché non testate): visibile e testabile in tab Score, colonna nello
+Scanner V2, e in tutte e tre le sezioni di backtest (SL/TP normale,
+Supertrend, confronto tra strategie).
+
+## Momentum Ranking (fattore cross-sezionale)
+
+Nuova sezione nel tab Scanner: **"🏆 Momentum Ranking"**. A differenza
+delle strategie sopra (segnale sì/no sul singolo titolo), questo è un
+**fattore**: classifica tutto l'universo scelto per rendimento
+storico su un periodo (1/3/6/12 mesi) e mostra i migliori — il
+fattore "momentum" documentato in letteratura accademica
+(Jegadeesh-Titman) e usato su vasta scala da fondi sistematici, con
+la differenza che qui manca il position sizing su volatilità e la
+gestione del rischio che i fondi applicano in più: è solo il ranking
+di base.
+
+Non è un segnale di acquisto in sé, è uno strumento di selezione: i
+titoli in cima hanno avuto il rendimento migliore nel periodo scelto,
+scommettendo che il momentum recente tenda a continuare nel breve-medio
+termine — funziona in media su portafogli diversificati, non è una
+garanzia sul singolo titolo isolato.
+
+## Momentum Ranking via Worker Cloudflare (Twelve Data)
+
+Il Momentum Ranking (tab Scanner) ora supporta due fonti dati, scelte
+da un menu a tendina:
+
+1. **yfinance (locale)**: funziona subito, nessun setup, come prima.
+2. **Twelve Data via Worker Cloudflare**: usa la metodologia
+   "momentum 12-1" (Jegadeesh-Titman — salta l'ultimo mese prima di
+   misurare il rendimento, per evitare il reversal a breve termine),
+   con caching persistente lato Worker (Streamlit Cloud e GitHub
+   Actions sono entrambi stateless: senza il Worker non avremmo modo
+   di fare caching persistente tra un'esecuzione e l'altra in Python).
+
+### Setup richiesto (una tantum, se si vuole usare la fonte Twelve Data)
+
+1. Account gratuito su twelvedata.com (piano Basic Free: 800
+   chiamate/giorno, 8/minuto — verificato ad agosto 2026)
+2. Deploy del Worker Cloudflare fornito dall'utente (`momentum-ranking`
+   Worker con KV namespace `MOMENTUM_CACHE` e secret
+   `TWELVE_DATA_API_KEY`)
+3. Nell'app: incollare l'URL del Worker nel campo dedicato, oppure
+   impostarlo una volta per tutte come Secret Streamlit
+   `MOMENTUM_WORKER_URL` (stesso meccanismo dei secrets Telegram)
+
+⚠️ **Attenzione al formato dei ticker**: Twelve Data potrebbe usare
+simboli diversi da yfinance per gli stessi titoli (es. senza il
+suffisso `.MI` per le azioni italiane, o simboli diversi per gli
+indici). Se compaiono molti errori "Storico insufficiente", controlla
+la corrispondenza dei simboli sulla documentazione di Twelve Data —
+non è stato possibile verificarlo direttamente in fase di sviluppo
+(serve una API key reale).
+
+Il primo calcolo della giornata può richiedere alcuni minuti (rate
+limit del piano gratuito, gestito automaticamente dal Worker a gruppi
+con pausa); le chiamate successive nello stesso giorno sono quasi
+istantanee grazie alla cache KV a 24h.

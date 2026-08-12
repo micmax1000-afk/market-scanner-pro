@@ -1,0 +1,32 @@
+name: Scanner Automatico - Mercati Americani
+
+on:
+  schedule:
+    # 16:00 UTC = 18:00 ora italiana quando è in vigore l'ora legale
+    # (CEST, UTC+2). Durante l'ora solare (CET, UTC+1, fine ottobre -
+    # fine marzo) l'orario reale sarà 19:00 anziché 18:00: per
+    # precisione assoluta tutto l'anno, in inverno cambia "0 16" in
+    # "0 17" qui sotto (vedi README).
+    - cron: '0 16 * * 1-5'
+  workflow_dispatch: {}  # permette di lanciarlo manualmente da GitHub per test
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Esegui lo scanner USA (Giornaliero + 4 Ore)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scheduled_scan.py --market usa
