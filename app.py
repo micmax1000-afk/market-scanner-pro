@@ -261,6 +261,36 @@ with tab3:
             for desc, met in turtle["conditions"]:
                 st.write(f"{'✅' if met else '❌'} {desc}")
 
+            st.subheader("🕯️ Strategia: Pattern di inversione (Candlestick) su supporto")
+            st.caption("⚠️ Non ancora collegata agli alert: testala con il Backtest SL/TP prima.")
+            candle = compute_strategy_candlestick_reversal(data)
+            if candle["signal"] == "ACQUISTO":
+                st.success("📈 ACQUISTO — pattern di inversione sul supporto")
+            else:
+                st.info("⏸️ Condizioni non tutte soddisfatte")
+            for desc, met in candle["conditions"]:
+                st.write(f"{'✅' if met else '❌'} {desc}")
+
+            st.subheader("🔺 Strategia: Triangolo simmetrico con breakout")
+            st.caption("⚠️ Non ancora collegata agli alert: testala con il Backtest SL/TP prima.")
+            triangle = compute_strategy_triangle_breakout(data)
+            if triangle["signal"] == "ACQUISTO":
+                st.success("📈 ACQUISTO — rottura del triangolo")
+            else:
+                st.info("⏸️ Condizioni non tutte soddisfatte")
+            for desc, met in triangle["conditions"]:
+                st.write(f"{'✅' if met else '❌'} {desc}")
+
+            st.subheader("🚩 Strategia: Bandiera rialzista (Bull Flag)")
+            st.caption("⚠️ Non ancora collegata agli alert: testala con il Backtest SL/TP prima.")
+            flag = compute_strategy_bull_flag(data)
+            if flag["signal"] == "ACQUISTO":
+                st.success("📈 ACQUISTO — rottura della bandiera")
+            else:
+                st.info("⏸️ Condizioni non tutte soddisfatte")
+            for desc, met in flag["conditions"]:
+                st.write(f"{'✅' if met else '❌'} {desc}")
+
 # --------------------------
 # TAB 4: SCANNER
 # --------------------------
@@ -528,7 +558,7 @@ with tab5:
 
     sl_tp_strategy_choice = st.selectbox(
         "Strategia da testare",
-        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)", "Turtle Trading (Donchian Breakout)"],
+        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)", "Turtle Trading (Donchian Breakout)", "Pattern candlestick su supporto", "Triangolo simmetrico con breakout", "Bandiera rialzista (Bull Flag)"],
         key="sl_tp_strategy_choice"
     )
     sl_tp_universe = st.multiselect(
@@ -556,8 +586,14 @@ with tab5:
                 strategy_fn = compute_strategy_pullback_oversold
             elif sl_tp_strategy_choice == "Pullback trend EMA20 (proposta)":
                 strategy_fn = compute_strategy_trend_pullback
-            else:
+            elif sl_tp_strategy_choice == "Turtle Trading (Donchian Breakout)":
                 strategy_fn = compute_strategy_turtle_breakout
+            elif sl_tp_strategy_choice == "Pattern candlestick su supporto":
+                strategy_fn = compute_strategy_candlestick_reversal
+            elif sl_tp_strategy_choice == "Triangolo simmetrico con breakout":
+                strategy_fn = compute_strategy_triangle_breakout
+            else:
+                strategy_fn = compute_strategy_bull_flag
 
             trades_by_ticker = {}
             progress = st.progress(0.0)
@@ -634,6 +670,9 @@ with tab5:
                 "Rottura resistenza + momentum basso (la tua)": compute_strategy_pullback_oversold,
                 "Pullback trend EMA20 (proposta)": compute_strategy_trend_pullback,
                 "Turtle Trading (Donchian Breakout)": compute_strategy_turtle_breakout,
+                "Pattern candlestick su supporto": compute_strategy_candlestick_reversal,
+                "Triangolo simmetrico con breakout": compute_strategy_triangle_breakout,
+                "Bandiera rialzista (Bull Flag)": compute_strategy_bull_flag,
             }
             trades_by_strategy = {name: {} for name in strategies}
 
@@ -700,7 +739,7 @@ with tab5:
 
     st_strategy_choice = st.selectbox(
         "Strategia da testare",
-        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)", "Turtle Trading (Donchian Breakout)"],
+        ["Segnale combinato (rottura + conferme)", "Rottura resistenza + momentum basso (la tua)", "Pullback trend EMA20 (proposta)", "Turtle Trading (Donchian Breakout)", "Pattern candlestick su supporto", "Triangolo simmetrico con breakout", "Bandiera rialzista (Bull Flag)"],
         key="st_strategy_choice"
     )
     st_universe = st.multiselect(
@@ -730,8 +769,14 @@ with tab5:
                 st_strategy_fn = compute_strategy_pullback_oversold
             elif st_strategy_choice == "Pullback trend EMA20 (proposta)":
                 st_strategy_fn = compute_strategy_trend_pullback
-            else:
+            elif st_strategy_choice == "Turtle Trading (Donchian Breakout)":
                 st_strategy_fn = compute_strategy_turtle_breakout
+            elif st_strategy_choice == "Pattern candlestick su supporto":
+                st_strategy_fn = compute_strategy_candlestick_reversal
+            elif st_strategy_choice == "Triangolo simmetrico con breakout":
+                st_strategy_fn = compute_strategy_triangle_breakout
+            else:
+                st_strategy_fn = compute_strategy_bull_flag
 
             trades_by_ticker_st = {}
             progress = st.progress(0.0)
