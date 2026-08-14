@@ -44,10 +44,13 @@ CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
 # averla testata (vedi tab Backtest).
 
 ALERT_STRATEGY_CONFIG = {
-    "trade_signal": True,        # Segnale combinato (rottura + conferme)
-    "pullback_oversold": True,   # Rottura resistenza + momentum basso (la tua)
-    "trend_pullback": True,      # Pullback trend EMA20 (proposta)
-    "turtle_breakout": False,    # Turtle Trading (Donchian Breakout)
+    "trade_signal": True,          # Segnale combinato (rottura + conferme) — testata
+    "pullback_oversold": True,     # Rottura resistenza + momentum basso (la tua) — testata
+    "trend_pullback": True,        # Pullback trend EMA20 (proposta) — testata
+    "turtle_breakout": True,       # Turtle Trading (Donchian Breakout) — NON testata a fondo: 18 perdite consecutive rilevate
+    "candlestick_reversal": True,  # Pattern candlestick su supporto — NON testata
+    "triangle_breakout": True,     # Triangolo simmetrico con breakout — NON testata
+    "bull_flag": True,             # Bandiera rialzista (Bull Flag) — NON testata
 }
 
 # ==========================
@@ -917,6 +920,15 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
     turtle = compute_strategy_turtle_breakout(data)
     turtle_buy = turtle["signal"] == "ACQUISTO"
 
+    candlestick = compute_strategy_candlestick_reversal(data)
+    candlestick_buy = candlestick["signal"] == "ACQUISTO"
+
+    triangle = compute_strategy_triangle_breakout(data)
+    triangle_buy = triangle["signal"] == "ACQUISTO"
+
+    bull_flag = compute_strategy_bull_flag(data)
+    bull_flag_buy = bull_flag["signal"] == "ACQUISTO"
+
     ref_index = get_reference_index(ticker)
     market_regime = compute_market_regime(ref_index) if ref_index else None
 
@@ -930,6 +942,9 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         "pullback_oversold": pullback_os_buy,
         "trend_pullback": pullback_trend_buy,
         "turtle_breakout": turtle_buy,
+        "candlestick_reversal": candlestick_buy,
+        "triangle_breakout": triangle_buy,
+        "bull_flag": bull_flag_buy,
     }
     if not any(ALERT_STRATEGY_CONFIG.get(key, False) and fired for key, fired in strategy_triggers.items()):
         return
@@ -957,6 +972,12 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         strategy_lines += "🟢 <b>STRATEGIA: Pullback trend EMA20</b> — tutte le condizioni soddisfatte\n"
     if turtle_buy:
         strategy_lines += "🟢 <b>STRATEGIA: Turtle Trading (Donchian Breakout)</b> — rottura confermata\n"
+    if candlestick_buy:
+        strategy_lines += "🟢 <b>STRATEGIA: Pattern candlestick su supporto</b> — inversione rialzista rilevata\n"
+    if triangle_buy:
+        strategy_lines += "🟢 <b>STRATEGIA: Triangolo simmetrico con breakout</b> — rottura confermata\n"
+    if bull_flag_buy:
+        strategy_lines += "🟢 <b>STRATEGIA: Bandiera rialzista (Bull Flag)</b> — rottura confermata\n"
     if strategy_lines:
         strategy_lines += "\n"
 
