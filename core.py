@@ -44,13 +44,14 @@ CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
 # averla testata (vedi tab Backtest).
 
 ALERT_STRATEGY_CONFIG = {
-    "trade_signal": True,          # Segnale combinato (rottura + conferme) — testata
-    "pullback_oversold": True,     # Rottura resistenza + momentum basso (la tua) — testata
-    "trend_pullback": True,        # Pullback trend EMA20 (proposta) — testata
-    "turtle_breakout": True,       # Turtle Trading (Donchian Breakout) — NON testata a fondo: 18 perdite consecutive rilevate
-    "candlestick_reversal": True,  # Pattern candlestick su supporto — NON testata
-    "triangle_breakout": True,     # Triangolo simmetrico con breakout — NON testata
-    "bull_flag": True,             # Bandiera rialzista (Bull Flag) — NON testata
+    "trade_signal": True,           # Segnale combinato (rottura + conferme) — testata
+    "pullback_oversold": True,      # Rottura resistenza + momentum basso (la tua) — testata
+    "trend_pullback": True,         # Pullback trend EMA20 (proposta) — testata
+    "turtle_breakout": False,       # Turtle Trading — non profittevole ai test
+    "candlestick_reversal": False,  # Pattern candlestick su supporto — non profittevole ai test
+    "triangle_breakout": False,     # Triangolo simmetrico con breakout — non profittevole ai test
+    "bull_flag": False,             # Bandiera rialzista (Bull Flag) — non profittevole ai test
+    "trendline_break_raw": True,    # Rottura trend line (rialzista o ribassista), SENZA richiedere conferme aggiuntive — solo informativo
 }
 
 # ==========================
@@ -945,6 +946,7 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         "candlestick_reversal": candlestick_buy,
         "triangle_breakout": triangle_buy,
         "bull_flag": bull_flag_buy,
+        "trendline_break_raw": resistance_break or support_break,
     }
     if not any(ALERT_STRATEGY_CONFIG.get(key, False) and fired for key, fired in strategy_triggers.items()):
         return
@@ -978,6 +980,13 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         strategy_lines += "🟢 <b>STRATEGIA: Triangolo simmetrico con breakout</b> — rottura confermata\n"
     if bull_flag_buy:
         strategy_lines += "🟢 <b>STRATEGIA: Bandiera rialzista (Bull Flag)</b> — rottura confermata\n"
+    # Rottura trend line senza conferme: mostrata solo se non è già coperta
+    # dal segnale combinato (che include la stessa rottura MA richiede
+    # anche le conferme) — evita di duplicare la stessa informazione con
+    # due diciture diverse nello stesso messaggio.
+    if (resistance_break or support_break) and not has_trade_signal:
+        direction = "rialzista (sopra resistenza)" if resistance_break else "ribassista (sotto supporto)"
+        strategy_lines += f"🔀 <b>ROTTURA TREND LINE</b> — {direction}, senza conferme aggiuntive (solo informativo)\n"
     if strategy_lines:
         strategy_lines += "\n"
 
