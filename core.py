@@ -949,7 +949,7 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         "trendline_break_raw": resistance_break or support_break,
     }
     if not any(ALERT_STRATEGY_CONFIG.get(key, False) and fired for key, fired in strategy_triggers.items()):
-        return
+        return False
 
     adx_str = f"{round(adx_val, 1)}" if not pd.isna(adx_val) else "n/d"
 
@@ -1009,6 +1009,7 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
     )
 
     send_telegram_message(BOT_TOKEN, CHAT_ID, msg)
+    return True
 
 # ==========================
 # SCANNER V2
@@ -1099,9 +1100,15 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
     if tickers is None:
         tickers = ITALIAN_TICKERS
     if period is None:
-        period = "6mo" if interval == "1d" else "60d"
+        # 2 anni (~500 barre): servono almeno 200 barre per l'EMA200, con
+        # 6 mesi (~125 barre) ogni titolo veniva scartato e non partiva
+        # nessun alert
+        period = "2y" if interval == "1d" else "60d"
 
     results = []
+    analyzed = 0
+    alerts_sent = 0
+    skipped_no_data = []
     regime_cache = {}  # evita di riscaricare lo stesso indice per ogni titolo
 
     for ticker in tickers:
@@ -1110,8 +1117,10 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
 
             min_bars = 200 if interval == "1d" else 80
             if data.empty or len(data) < min_bars:
+                skipped_no_data.append(ticker)
                 continue
 
+            analyzed += 1
             data = compute_indicators(data)
             score = compute_score(data)
 
@@ -1124,7 +1133,8 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
             # send_alert_v2() decide da sola, al suo interno, se le
             # condizioni (di una qualsiasi delle strategie) meritano un
             # messaggio.
-            send_alert_v2(ticker, data, score, timeframe_label=timeframe_label)
+            if send_alert_v2(ticker, data, score, timeframe_label=timeframe_label):
+                alerts_sent += 1
 
             if not filter_ema(data):
                 continue
@@ -1200,6 +1210,11 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
     df = pd.DataFrame(results)
     if not df.empty:
         df = df.sort_values("Score", ascending=False)
+    df.attrs["stats"] = {
+        "analyzed": analyzed,
+        "alerts_sent": alerts_sent,
+        "skipped_no_data": skipped_no_data,
+    }
     return df
 
 # ==========================

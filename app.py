@@ -37,7 +37,7 @@ else:
     st.caption(f"Ticker: `{ticker}`")
 
 timeframe = TIMEFRAME_OPTIONS[timeframe_label]
-period = st.selectbox("Periodo storico", ["1mo", "3mo", "6mo", "1y", "2y"] if timeframe["interval"] == "1d" else ["5d", "1mo", "3mo", "60d"], index=2 if timeframe["interval"] == "1d" else 0)
+period = st.selectbox("Periodo storico", ["1mo", "3mo", "6mo", "1y", "2y"] if timeframe["interval"] == "1d" else ["5d", "1mo", "3mo", "60d"], index=3 if timeframe["interval"] == "1d" else 0)
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
     ["📈 Grafico", "📊 Indicatori", "🔢 Score", "🧮 Scanner", "📜 Backtest"]
@@ -347,7 +347,7 @@ with tab4:
             all_results = []
             for tf_label in scan_timeframes:
                 tf = TIMEFRAME_OPTIONS[tf_label]
-                scan_period = "6mo" if tf["interval"] == "1d" else "60d"
+                scan_period = "2y" if tf["interval"] == "1d" else "60d"
                 with st.spinner(f"Scansione {tf_label} in corso ({len(scan_tickers)} ticker)..."):
                     df_tf = run_scanner_v2(
                         tickers=scan_tickers,

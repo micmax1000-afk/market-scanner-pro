@@ -57,14 +57,16 @@ def run_market_scan(market):
 
     print(f"Scansione {market_label} — Giornaliero ({len(tickers)} titoli)...")
     total_hits = 0
+    stats = {"analyzed": 0, "alerts_sent": 0, "skipped_no_data": []}
     try:
         df = run_scanner_v2(
             tickers=tickers,
             interval="1d",
-            period="6mo",
+            period="2y",  # servono almeno 200 barre (EMA200)
             timeframe_label="Giornaliero",
         )
         total_hits = len(df) if df is not None and not df.empty else 0
+        stats = df.attrs.get("stats", stats)
         print(f"  -> {total_hits} titoli hanno superato i filtri dello scanner.")
     except Exception as e:
         print(f"  -> Errore durante la scansione: {e}")
@@ -73,10 +75,18 @@ def run_market_scan(market):
         f"✅ <b>Scanner automatico completato</b>\n"
         f"Mercato: {market_label}\n"
         f"Timeframe: Giornaliero\n"
-        f"Titoli scansionati: {len(tickers)}\n"
-        f"Titoli che hanno superato i filtri: {total_hits}\n\n"
-        f"(gli alert dettagliati per singolo titolo, se presenti, sono i messaggi precedenti)"
+        f"Titoli nell'universo: {len(tickers)}\n"
+        f"Titoli analizzati (dati sufficienti): {stats['analyzed']}\n"
+        f"🔔 Alert inviati: {stats['alerts_sent']}\n"
+        f"Titoli che passano anche i 7 filtri dello Scanner V2: {total_hits}\n"
     )
+    if stats["skipped_no_data"]:
+        summary += f"\n⚠️ Saltati per dati insufficienti: {', '.join(stats['skipped_no_data'])}\n"
+    if stats["alerts_sent"] == 0 and stats["analyzed"] > 0:
+        summary += "\nNessuna strategia attiva ha dato segnale oggi."
+    elif stats["analyzed"] == 0:
+        summary += "\n❗ Nessun titolo analizzato: probabile problema di download dati."
+
     if BOT_TOKEN and CHAT_ID:
         send_telegram_message(BOT_TOKEN, CHAT_ID, summary)
     print(summary)
