@@ -38,10 +38,20 @@ def build_universe():
 
 
 def _worker(ticker, period):
-    try:
-        data = download_data(ticker, period=period, interval="1d")
-    except Exception as e:
-        return ticker, None, f"download fallito: {e}"
+    # Yahoo a volte risponde vuoto quando riceve molte richieste insieme:
+    # si riprova fino a 4 volte, aspettando sempre di più
+    data, last_err = None, None
+    for attempt in range(4):
+        try:
+            data = download_data(ticker, period=period, interval="1d")
+            last_err = None
+        except Exception as e:
+            data, last_err = None, e
+        if data is not None and not data.empty:
+            break
+        time.sleep(5 * (attempt + 1))
+    if last_err is not None:
+        return ticker, None, f"download fallito: {last_err}"
     if data is None or data.empty or len(data) < 300:
         return ticker, None, f"dati insufficienti ({0 if data is None else len(data)} barre)"
     t0 = time.time()
