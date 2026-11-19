@@ -239,14 +239,21 @@ def summarize(trades):
     }
 
 
-def verdict(full, oos):
+def verdict(full, oos, ins=None):
     """Giudizio sintetico in italiano, volutamente severo."""
     if full.get("n", 0) < 30:
         return "insufficiente", "Meno di 30 trade: troppo pochi per dire qualcosa."
     pf, t = full.get("profit_factor") or 0, full.get("t_stat")
-    oos_ok = oos.get("n", 0) >= 15 and (oos.get("avg_r") or 0) > 0
-    if full["avg_r"] > 0 and pf > 1.1 and t is not None and t > 2 and oos_ok:
+    oos_r, oos_t = oos.get("avg_r") or 0, oos.get("t_stat") or 0
+    ins_r = (ins or {}).get("avg_r") or 0
+    solid = full["avg_r"] > 0 and pf > 1.1 and t is not None and t > 2
+    # confermata solo se negli anni recenti tiene almeno metà del vantaggio
+    # e resta distinguibile dal caso
+    oos_ok = oos.get("n", 0) >= 15 and oos_r > 0 and oos_r >= 0.5 * ins_r and oos_t > 1.5
+    if solid and oos_ok:
         return "promettente", "Guadagno medio positivo, statisticamente solido e confermato sugli anni recenti."
+    if solid and oos_r > 0:
+        return "incerta", "Positiva sui 10 anni, ma dal 2022 il vantaggio si è ridotto molto e non è più distinguibile dal caso."
     if full["avg_r"] > 0 and pf > 1.0:
         return "incerta", "Leggermente positiva, ma il risultato potrebbe essere dovuto al caso o non regge su tutti gli anni."
     return "negativa", "Dopo costi e ingresso realistico perde soldi."

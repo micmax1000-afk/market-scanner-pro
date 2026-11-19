@@ -324,8 +324,8 @@
    "name": "Segnale combinato (rottura + 3 conferme)",
    "alert_on": true,
    "signal_days": 1686,
-   "verdict": "promettente",
-   "verdict_text": "Guadagno medio positivo, statisticamente solido e confermato sugli anni recenti.",
+   "verdict": "incerta",
+   "verdict_text": "Positiva sui 10 anni, ma dal 2022 il vantaggio si è ridotto molto e non è più distinguibile dal caso.",
    "full": {
     "n": 1309,
     "win_rate": 44.690603514132924,

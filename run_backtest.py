@@ -103,7 +103,7 @@ def aggregate(per_ticker, universe):
         ins = summarize([t for t in new_all if pd.Timestamp(t["entry_date"]) < split])
         oos = summarize([t for t in new_all if pd.Timestamp(t["entry_date"]) >= split])
         old = summarize(old_all)
-        v, v_text = verdict(full, oos)
+        v, v_text = verdict(full, oos, ins)
 
         # curva dei guadagni: R cumulati a fine mese (tutti i titoli insieme)
         equity = []
