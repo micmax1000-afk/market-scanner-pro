@@ -219,7 +219,7 @@ def compute_indicators(data):
     # ADX (forza del trend)
     data = compute_adx(data)
 
-    # VWAP (prezzo medio ponderato per volume, dall'inizio del periodo)
+    # VWAP mobile 20 barre (prezzo medio ponderato per volume)
     data = compute_vwap(data)
 
     return data
@@ -340,14 +340,19 @@ def adx_score(data):
 # VWAP
 # ==========================
 
-def compute_vwap(data):
-    """VWAP 'ancorato' dall'inizio della serie caricata (non è il VWAP
-    intraday classico che riparte ogni giorno, dato che qui lavoriamo
-    su barre giornaliere)."""
+def compute_vwap(data, window=20):
+    """VWAP mobile sulle ultime `window` barre. Prima era 'ancorato'
+    all'inizio dei dati scaricati: il suo valore cambiava a seconda di
+    quanto storico si scaricava (6 mesi, 2 anni, 10 anni), quindi lo
+    stesso giorno poteva dare segnali diversi nell'app, nello scanner
+    automatico e nel backtest. Con una finestra mobile il valore
+    dipende solo dalle ultime `window` barre. Se il volume è sempre 0
+    (alcuni indici su Yahoo) resta NaN e la conferma viene ignorata."""
     typical_price = (data["High"] + data["Low"] + data["Close"]) / 3
-    cum_vol = data["Volume"].cumsum()
-    cum_tp_vol = (typical_price * data["Volume"]).cumsum()
-    data["VWAP"] = cum_tp_vol / cum_vol.replace(0, np.nan)
+    vol = data["Volume"]
+    sum_vol = vol.rolling(window).sum()
+    sum_tp_vol = (typical_price * vol).rolling(window).sum()
+    data["VWAP"] = sum_tp_vol / sum_vol.replace(0, np.nan)
     return data
 
 def vwap_score(data):
@@ -1290,9 +1295,15 @@ def compute_strategy_pullback_oversold(data, stoch_max=40, rsi_max=50, bb_width_
             "resistance_value": None,
         }
 
-    # il prezzo rompe (o è appena sopra) la trend line di resistenza discendente
-    broke_above = last["Close"] >= resistance["value_today"] * (1 - touch_tolerance)
-    conditions.append(("Rottura della trend line discendente (resistenza)", bool(broke_above)))
+    # rottura VERA della trend line di resistenza discendente: ieri la
+    # chiusura era sotto (o sulla) linea, oggi è sopra. Prima bastava
+    # essere fino al 2% SOTTO la linea, e il segnale si ripeteva ogni
+    # giorno finché il prezzo restava in zona (stessa regola di
+    # detect_swing_trendline_break usata dal segnale combinato).
+    close_yesterday = data["Close"].iloc[-2] if len(data) >= 2 else np.nan
+    broke_above = (not pd.isna(close_yesterday)) and \
+        close_yesterday <= resistance["value_yesterday"] and last["Close"] > resistance["value_today"]
+    conditions.append(("Rottura della trend line discendente (resistenza): ieri sotto, oggi sopra", bool(broke_above)))
 
     stoch_k = last.get("Stoch_K", np.nan)
     stoch_low = (not pd.isna(stoch_k)) and stoch_k < stoch_max

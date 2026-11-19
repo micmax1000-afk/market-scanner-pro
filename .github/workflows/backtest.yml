@@ -1,0 +1,48 @@
+name: Backtest realistico
+
+# Gira il backtest realistico (backtest_v2.py) su 10 anni di dati veri e
+# salva i risultati in results/backtest_results.json sullo stesso branch.
+# Parte da solo quando cambiano i file del backtest, oppure a mano da
+# GitHub (Actions -> Backtest realistico -> Run workflow).
+
+on:
+  push:
+    paths:
+      - 'core.py'
+      - 'backtest_v2.py'
+      - 'run_backtest.py'
+      - '.github/workflows/backtest.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backtest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Esegui il backtest (10 anni)
+        run: python run_backtest.py --period 10y --out results/backtest_results.json
+
+      - name: Salva i risultati nel repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/backtest_results.json
+          git commit -m "Risultati backtest realistico ($(date -u +%Y-%m-%d))" || exit 0
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
