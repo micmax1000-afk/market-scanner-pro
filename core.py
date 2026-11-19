@@ -61,7 +61,7 @@ ALERT_STRATEGY_CONFIG = {
 ITALIAN_TICKERS = [
     "ENI.MI", "ENEL.MI", "ISP.MI", "UCG.MI", "STLAM.MI", "LDO.MI", "RACE.MI",
     "MONC.MI", "TRN.MI", "PST.MI", "AMP.MI", "BMED.MI", "BAMI.MI", "BPSO.MI",
-    "BPER.MI", "CNHI.MI", "DIA.MI", "ERG.MI", "EXO.MI", "G.MI", "IG.MI",
+    "BPE.MI", "CNHI.MI", "DIA.MI", "ERG.MI", "EXO.MI", "G.MI", "IG.MI",
     "IT.MI", "JUVE.MI", "LR.MI", "MS.MI", "PRY.MI", "REC.MI", "SFER.MI",
     "TIT.MI", "TEN.MI", "UNI.MI", "VIV.MI"
 ]
