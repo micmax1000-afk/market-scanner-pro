@@ -570,3 +570,38 @@ Il primo calcolo della giornata può richiedere alcuni minuti (rate
 limit del piano gratuito, gestito automaticamente dal Worker a gruppi
 con pausa); le chiamate successive nello stesso giorno sono quasi
 istantanee grazie alla cache KV a 24h.
+
+## Backtest realistico v2 (`backtest_v2.py`, `run_backtest.py`)
+
+Il backtest SL/TP dell'app dava numeri più ottimisti della realtà. La
+versione 2 corregge quattro cose:
+
+| | Backtest vecchio | Backtest v2 |
+|---|---|---|
+| Ingresso | chiusura del giorno del segnale | apertura del giorno **dopo** (l'alert arriva a mercato chiuso) |
+| Costi | nessuno | 0,15% per lato (commissione + slippage) |
+| Gap | stop/target sempre al prezzo teorico | se apre oltre lo stop o il target, esce all'apertura |
+| Trade sovrapposti | ogni giorno di segnale = un trade | un solo trade aperto per titolo |
+
+In più divide lo storico in due periodi (fino al 2021 e dal 2022) e
+aggiunge un riferimento "entrata sempre", che mostra quanto vale non
+avere nessun segnale con le stesse regole.
+
+**Come si esegue:** il workflow `.github/workflows/backtest.yml` parte da
+solo quando cambiano `core.py` o i file del backtest, oppure a mano da
+GitHub (Actions → Backtest realistico → Run workflow). Scarica 10 anni di
+dati e salva i risultati in `results/backtest_results.json`. In locale:
+
+```bash
+python run_backtest.py --period 10y --out results/backtest_results.json
+```
+
+**Altre correzioni fatte insieme:**
+- Strategia "Rottura resistenza + momentum basso": la rottura ora
+  richiede che ieri la chiusura fosse sotto la trend line e oggi sopra.
+  Prima bastava essere fino al 2% sotto la linea, e il segnale si
+  ripeteva ogni giorno.
+- VWAP mobile a 20 giorni invece che ancorato all'inizio dei dati
+  scaricati: prima il valore cambiava a seconda di quanto storico si
+  scaricava (app, scanner automatico e backtest davano numeri diversi).
+- Ticker BPER corretto in `BPE.MI`.
