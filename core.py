@@ -46,7 +46,7 @@ ALERT_STRATEGY_CONFIG = {
     "trade_signal": False,          # Segnale combinato: positivo su 10 anni ma dal 2022 non distinguibile dal caso
     "trendline_break_raw": False,   # Rottura trend line senza conferme: mai testata da sola, solo informativa
     # Strategie di strategies_pro.py (vedi scheduled_scan.py)
-    "mean_reversion_rsi2": True,
+    "mean_reversion_rsi2": False,   # bocciata al test su 20 anni: dal 2016 perde dopo i costi
     "trend_10_mesi": True,
     "momentum_12_1": True,
 }

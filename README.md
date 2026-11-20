@@ -1,18 +1,54 @@
-# Market Scanner Pro V3 + ML — versione corretta
+# Market Scanner Pro
 
-## Come avviarlo
+Ti dice ogni sera quali operazioni fare il giorno dopo, seguendo due
+strategie che hanno superato un test realistico su 20 anni di dati.
+
+## Le strategie attive
+
+| Strategia | Cosa fa | Test 2007-2026 (dopo i costi) |
+|---|---|---|
+| **Momentum 12-1 azioni italiane** | A fine mese compra le 5 azioni italiane salite di più negli ultimi 12 mesi (escluso l'ultimo), 20% ciascuna. Se il FTSE MIB è sotto la sua media a 10 mesi, resta in liquidità. | +12,5% l'anno, calo massimo −29%. Compra e tieni: +9,5% l'anno, −57%. |
+| **Trend following 10 mesi** | A fine mese tiene un indice solo se è sopra la sua media a 10 mesi, altrimenti liquidità. | +4,7% l'anno, calo massimo −19%. Compra e tieni: +6,5% l'anno, −57%. Rende meno, ma dimezza le perdite nei crolli. |
+
+Regole e fonti in `strategies_pro.py`; risultati completi in
+`results/pro_results.json` e nella pagina **Strategie** dell'app.
+
+Testate e scartate perché dopo i costi non guadagnano: mean reversion
+RSI(2), segnale combinato rottura + conferme, pullback ipervenduto,
+pullback EMA20, Turtle, candlestick, triangolo, bull flag.
+
+**Limiti da sapere:** il test usa solo i titoli quotati oggi (mancano
+quelli falliti o tolti dalla borsa, e questo rende i risultati più
+ottimisti, soprattutto per il momentum); la liquidità nel test non rende
+nulla; i risultati passati non garantiscono quelli futuri.
+
+## Come si usa
+
+**Ogni sera su Telegram** (lun-ven, circa 22:40 ora italiana d'inverno):
+un messaggio con le operazioni da fare il giorno dopo all'apertura e le
+posizioni in corso. Lo manda il workflow `.github/workflows/scan_daily.yml`,
+che usa i Secrets `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` del repository.
+
+**L'app**, in locale:
 
 ```bash
 pip install -r requirements.txt
-
-# (opzionale) alert Telegram: imposta le variabili d'ambiente
-export TELEGRAM_BOT_TOKEN="il-tuo-token"
-export TELEGRAM_CHAT_ID="il-tuo-chat-id"
-
 streamlit run app.py
 ```
 
-Si apre in automatico su `http://localhost:8501`.
+- **Cosa fare oggi** (pagina principale): operazioni di domani con
+  l'importo in euro calcolato sul capitale che inserisci a sinistra.
+- **Strategie**: risultati dei test, grafici contro il compra e tieni.
+- **Grafico**: i periodi in cui la strategia teneva un titolo.
+- **Strumenti avanzati**: la vecchia app completa (indicatori, score,
+  scanner, machine learning).
+
+Per averla online gratis vedi "Pubblicarlo online" più sotto
+(Streamlit Community Cloud, file principale `app.py`).
+
+**Rifare il test:** GitHub → Actions → Backtest realistico → Run workflow.
+
+## Storico delle modifiche
 
 ## Cosa ho corretto rispetto alla versione originale
 

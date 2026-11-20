@@ -1,0 +1,30 @@
+name: Segnali serali (Telegram)
+
+# Dal lunedì al venerdì alle 21:40 UTC (22:40 in Italia d'inverno, 23:40
+# d'estate): Wall Street ha chiuso alle 21:00 UTC (20:00 d'estate), quindi
+# le candele giornaliere di Europa e USA sono complete. Il messaggio dice
+# cosa fare il giorno dopo all'apertura.
+on:
+  schedule:
+    - cron: '40 21 * * 1-5'
+  workflow_dispatch: {}  # per lanciarlo a mano da GitHub
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Calcola i segnali e invia il messaggio
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scheduled_scan.py
