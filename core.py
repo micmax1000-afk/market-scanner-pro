@@ -39,19 +39,16 @@ CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
 # manuale dell'app sia per gli scanner automatici (GitHub Actions):
 # è lo stesso file per entrambi.
 #
-# Di default sono attive solo le 3 strategie testate con backtest
-# SL/TP; Turtle Trading è spenta finché non decidi di attivarla dopo
-# averla testata (vedi tab Backtest).
+# Attive solo le strategie che hanno passato il backtest realistico
+# (vedi results/ e la pagina dei risultati).
 
 ALERT_STRATEGY_CONFIG = {
-    "trade_signal": True,           # Segnale combinato (rottura + conferme) — testata
-    "pullback_oversold": True,      # Rottura resistenza + momentum basso (la tua) — testata
-    "trend_pullback": True,         # Pullback trend EMA20 (proposta) — testata
-    "turtle_breakout": False,       # Turtle Trading — non profittevole ai test
-    "candlestick_reversal": False,  # Pattern candlestick su supporto — non profittevole ai test
-    "triangle_breakout": False,     # Triangolo simmetrico con breakout — non profittevole ai test
-    "bull_flag": False,             # Bandiera rialzista (Bull Flag) — non profittevole ai test
-    "trendline_break_raw": True,    # Rottura trend line (rialzista o ribassista), SENZA richiedere conferme aggiuntive — solo informativo
+    "trade_signal": False,          # Segnale combinato: positivo su 10 anni ma dal 2022 non distinguibile dal caso
+    "trendline_break_raw": False,   # Rottura trend line senza conferme: mai testata da sola, solo informativa
+    # Strategie di strategies_pro.py (vedi scheduled_scan.py)
+    "mean_reversion_rsi2": True,
+    "trend_10_mesi": True,
+    "momentum_12_1": True,
 }
 
 # ==========================
@@ -918,22 +915,6 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
     minus_di = last.get("Minus_DI", np.nan)
     above_vwap = (not pd.isna(last.get("VWAP", np.nan))) and last["Close"] > last["VWAP"]
 
-    pullback_os = compute_strategy_pullback_oversold(data)
-    pullback_trend = compute_strategy_trend_pullback(data)
-    pullback_os_buy = pullback_os["signal"] == "ACQUISTO"
-    pullback_trend_buy = pullback_trend["signal"] == "ACQUISTO"
-
-    turtle = compute_strategy_turtle_breakout(data)
-    turtle_buy = turtle["signal"] == "ACQUISTO"
-
-    candlestick = compute_strategy_candlestick_reversal(data)
-    candlestick_buy = candlestick["signal"] == "ACQUISTO"
-
-    triangle = compute_strategy_triangle_breakout(data)
-    triangle_buy = triangle["signal"] == "ACQUISTO"
-
-    bull_flag = compute_strategy_bull_flag(data)
-    bull_flag_buy = bull_flag["signal"] == "ACQUISTO"
 
     ref_index = get_reference_index(ticker)
     market_regime = compute_market_regime(ref_index) if ref_index else None
@@ -945,12 +926,6 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
     # devono generare notifica, senza toccare il resto del codice.
     strategy_triggers = {
         "trade_signal": has_trade_signal,
-        "pullback_oversold": pullback_os_buy,
-        "trend_pullback": pullback_trend_buy,
-        "turtle_breakout": turtle_buy,
-        "candlestick_reversal": candlestick_buy,
-        "triangle_breakout": triangle_buy,
-        "bull_flag": bull_flag_buy,
         "trendline_break_raw": resistance_break or support_break,
     }
     if not any(ALERT_STRATEGY_CONFIG.get(key, False) and fired for key, fired in strategy_triggers.items()):
@@ -973,18 +948,6 @@ def send_alert_v2(ticker, data, score, timeframe_label="Giornaliero"):
         signal_header = f"🔴 <b>SEGNALE VENDITA</b> ({len(trade['confirmations_used'])} conferme)\n\n"
 
     strategy_lines = ""
-    if pullback_os_buy:
-        strategy_lines += "🟢 <b>STRATEGIA: Rottura resistenza + momentum basso</b> — tutte le condizioni soddisfatte\n"
-    if pullback_trend_buy:
-        strategy_lines += "🟢 <b>STRATEGIA: Pullback trend EMA20</b> — tutte le condizioni soddisfatte\n"
-    if turtle_buy:
-        strategy_lines += "🟢 <b>STRATEGIA: Turtle Trading (Donchian Breakout)</b> — rottura confermata\n"
-    if candlestick_buy:
-        strategy_lines += "🟢 <b>STRATEGIA: Pattern candlestick su supporto</b> — inversione rialzista rilevata\n"
-    if triangle_buy:
-        strategy_lines += "🟢 <b>STRATEGIA: Triangolo simmetrico con breakout</b> — rottura confermata\n"
-    if bull_flag_buy:
-        strategy_lines += "🟢 <b>STRATEGIA: Bandiera rialzista (Bull Flag)</b> — rottura confermata\n"
     # Rottura trend line senza conferme: mostrata solo se non è già coperta
     # dal segnale combinato (che include la stessa rottura MA richiede
     # anche le conferme) — evita di duplicare la stessa informazione con
@@ -1171,12 +1134,6 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
             else:
                 trendline_flag = ""
             trade_signal = compute_trade_signal(data)["signal"]
-            pullback_os_signal = compute_strategy_pullback_oversold(data)["signal"]
-            pullback_trend_signal = compute_strategy_trend_pullback(data)["signal"]
-            turtle_signal = compute_strategy_turtle_breakout(data)["signal"]
-            candle_signal = compute_strategy_candlestick_reversal(data)["signal"]
-            triangle_signal = compute_strategy_triangle_breakout(data)["signal"]
-            flag_signal = compute_strategy_bull_flag(data)["signal"]
 
             ref_index = get_reference_index(ticker)
             if ref_index is not None:
@@ -1193,12 +1150,6 @@ def run_scanner_v2(tickers=None, interval="1d", period=None, timeframe_label="Gi
                 "Score": score,
                 "Score V4": compute_score_v4(data),
                 "Segnale": trade_signal,
-                "Rottura+Momentum Basso": pullback_os_signal,
-                "Pullback Trend": pullback_trend_signal,
-                "Turtle Breakout": turtle_signal,
-                "Candlestick Reversal": candle_signal,
-                "Triangolo Breakout": triangle_signal,
-                "Bull Flag": flag_signal,
                 "RSI": round(last["RSI"], 2),
                 "MACD": round(last["MACD"], 4),
                 "ATR": round(atr_val, 4) if not pd.isna(atr_val) else None,
@@ -1270,286 +1221,10 @@ def backtest_breakouts(data):
 # BACKTEST SCORE
 # ==========================
 
-# ==========================
-# STRATEGIA "TUA": ROTTURA RESISTENZA DISCENDENTE CON MOMENTUM ANCORA BASSO
-# ==========================
-# Compra quando il prezzo rompe la trend line di resistenza
-# discendente MENTRE Stocastico e RSI sono ancora bassi (la rottura
-# avviene "presto", prima che il titolo diventi ipercomprato: più
-# margine di salita) e le bande di Bollinger sono "vicine" tra loro
-# (squeeze = bassa volatilità), condizione classica che spesso precede
-# un movimento direzionale forte.
-
-def compute_strategy_pullback_oversold(data, stoch_max=40, rsi_max=50, bb_width_percentile=30,
-                                        touch_tolerance=0.02, squeeze_lookback=100):
-    last = data.iloc[-1]
-    resistance = compute_swing_trendline(data, lookback=min(90, len(data)), pivot_window=3, kind="high")
-
-    conditions = []
-    signal = "NEUTRALE"
-
-    if resistance is None:
-        return {
-            "signal": "NEUTRALE",
-            "conditions": [("Trend line discendente rilevata", False)],
-            "resistance_value": None,
-        }
-
-    # rottura VERA della trend line di resistenza discendente: ieri la
-    # chiusura era sotto (o sulla) linea, oggi è sopra. Prima bastava
-    # essere fino al 2% SOTTO la linea, e il segnale si ripeteva ogni
-    # giorno finché il prezzo restava in zona (stessa regola di
-    # detect_swing_trendline_break usata dal segnale combinato).
-    close_yesterday = data["Close"].iloc[-2] if len(data) >= 2 else np.nan
-    broke_above = (not pd.isna(close_yesterday)) and \
-        close_yesterday <= resistance["value_yesterday"] and last["Close"] > resistance["value_today"]
-    conditions.append(("Rottura della trend line discendente (resistenza): ieri sotto, oggi sopra", bool(broke_above)))
-
-    stoch_k = last.get("Stoch_K", np.nan)
-    stoch_low = (not pd.isna(stoch_k)) and stoch_k < stoch_max
-    conditions.append((f"Stocastico 10-3-6 ancora basso (K={round(stoch_k,1) if not pd.isna(stoch_k) else 'n/d'} < {stoch_max})", bool(stoch_low)))
-
-    rsi = last.get("RSI", np.nan)
-    rsi_low = (not pd.isna(rsi)) and rsi < rsi_max
-    conditions.append((f"RSI ancora basso (RSI={round(rsi,1) if not pd.isna(rsi) else 'n/d'} < {rsi_max})", bool(rsi_low)))
-
-    # squeeze: la larghezza attuale delle bande è tra le più strette
-    # rispetto agli ultimi `squeeze_lookback` giorni
-    bb_width_series = data["BB_Width"].dropna().tail(squeeze_lookback)
-    bb_width_now = last.get("BB_Width", np.nan)
-    if len(bb_width_series) >= 20 and not pd.isna(bb_width_now):
-        percentile_now = (bb_width_series <= bb_width_now).mean() * 100
-        bb_squeeze = percentile_now <= bb_width_percentile
-    else:
-        percentile_now = np.nan
-        bb_squeeze = False
-    conditions.append((f"Bande di Bollinger vicine/squeeze (percentile larghezza={round(percentile_now,0) if not pd.isna(percentile_now) else 'n/d'} <= {bb_width_percentile})", bool(bb_squeeze)))
-
-    if all(met for _, met in conditions):
-        signal = "ACQUISTO"
-
-    return {"signal": signal, "conditions": conditions, "resistance_value": resistance["value_today"]}
-
-# ==========================
-# STRATEGIA "MIA": PULLBACK ALLA EMA20 IN TREND FORTE CONFERMATO
-# ==========================
-# Idea: comprare le rotture pure spesso significa comprare quando il
-# titolo è già "esteso" (rischio di rientro). Storicamente funziona
-# meglio comprare i ritracciamenti superficiali DENTRO un trend già
-# forte e confermato, non l'inseguimento del breakout. Condizioni:
-# 1. Trend rialzista strutturale confermato: prezzo sopra EMA200,
-#    EMA20 sopra EMA50 (allineamento classico)
-# 2. Trend abbastanza forte da avere senso seguirlo: ADX > 20 con
-#    +DI > -DI (altrimenti si rischia di comprare un laterale)
-# 3. Pullback superficiale: il prezzo è tornato a toccare/sfiorare la
-#    EMA20 (non un crollo profondo, un normale ritracciamento)
-# 4. Conferma di ripartenza: MACD sopra la Signal line
-# 5. Volume non anomalo in negativo (evita titoli poco liquidi in quel
-#    momento)
-
-def compute_strategy_trend_pullback(data, pullback_tolerance=0.015):
-    last = data.iloc[-1]
-
-    conditions = []
-    signal = "NEUTRALE"
-
-    ema20, ema50, ema200 = last.get("EMA20", np.nan), last.get("EMA50", np.nan), last.get("EMA200", np.nan)
-    close = last["Close"]
-
-    uptrend = (not pd.isna(ema200)) and (not pd.isna(ema50)) and close > ema200 and ema20 > ema50
-    conditions.append(("Trend strutturale rialzista (prezzo > EMA200, EMA20 > EMA50)", bool(uptrend)))
-
-    adx = last.get("ADX", np.nan)
-    plus_di, minus_di = last.get("Plus_DI", np.nan), last.get("Minus_DI", np.nan)
-    strong_trend = (not pd.isna(adx)) and adx > 20 and plus_di > minus_di
-    conditions.append((f"Trend abbastanza forte (ADX={round(adx,1) if not pd.isna(adx) else 'n/d'} > 20, +DI>-DI)", bool(strong_trend)))
-
-    pullback_to_ema20 = (not pd.isna(ema20)) and abs(close - ema20) / ema20 <= pullback_tolerance
-    conditions.append((f"Ritracciamento superficiale sulla EMA20 (entro {pullback_tolerance*100:.1f}%)", bool(pullback_to_ema20)))
-
-    macd, macd_signal = last.get("MACD", np.nan), last.get("Signal", np.nan)
-    macd_ok = (not pd.isna(macd)) and (not pd.isna(macd_signal)) and macd > macd_signal
-    conditions.append(("MACD sopra la Signal (momentum di ripartenza)", bool(macd_ok)))
-
-    vol20 = data["Volume"].rolling(20).mean().iloc[-1]
-    volume_ok = (not pd.isna(vol20)) and vol20 > 0 and data["Volume"].iloc[-1] > vol20 * 0.7
-    conditions.append(("Volume non anomalo in negativo (>= 70% della media 20gg)", bool(volume_ok)))
-
-    if all(met for _, met in conditions):
-        signal = "ACQUISTO"
-
-    return {"signal": signal, "conditions": conditions}
-
-# ==========================
-# BACKTEST GENERICO PER UNA STRATEGIA DI SOLO ACQUISTO
-# ==========================
-
-# ==========================
-# STRATEGIA: STOCASTICO 10-3-6 BASSO CON CONFERMA RSI
-# ==========================
-# ==========================
-# STRATEGIA: TURTLE TRADING (DONCHIAN CHANNEL BREAKOUT)
-# ==========================
-# Sistema storico reale (anni '80, Richard Dennis): compra la rottura
-# del massimo delle ultime N giornate (default 20, il "Sistema 1"
-# originale). A differenza delle altre strategie, non usa trend line
-# sui pivot: la resistenza è semplicemente il canale di Donchian, il
-# massimo puro degli ultimi N giorni PRIMA di oggi (stesso principio
-# del bugfix già applicato a breakout_score_advanced: la resistenza
-# non deve includere il giorno stesso di oggi). Versione semplificata
-# rispetto all'originale: manca il filtro "salta il trade se l'ultimo
-# breakout era stato vincente" del sistema Turtle reale.
-
-def compute_strategy_turtle_breakout(data, entry_period=20):
-    if len(data) <= entry_period:
-        return {"signal": "NEUTRALE", "conditions": [("Storico sufficiente per il canale di Donchian", False)]}
-
-    last_close = data["Close"].iloc[-1]
-    donchian_high = data["High"].iloc[-(entry_period + 1):-1].max()  # esclude oggi
-
-    conditions = [
-        (f"Chiusura sopra il massimo dei {entry_period} giorni precedenti (Donchian={round(donchian_high,2)})",
-         bool(last_close > donchian_high)),
-    ]
-
-    signal = "ACQUISTO" if all(met for _, met in conditions) else "NEUTRALE"
-    return {"signal": signal, "conditions": conditions, "donchian_high": donchian_high}
-
-# ==========================
-# PATTERN CANDLESTICK (helper)
-# ==========================
-
-def detect_bullish_engulfing(data):
-    if len(data) < 2:
-        return False
-    prev, curr = data.iloc[-2], data.iloc[-1]
-    prev_bearish = prev["Close"] < prev["Open"]
-    curr_bullish = curr["Close"] > curr["Open"]
-    engulfs = curr["Open"] <= prev["Close"] and curr["Close"] >= prev["Open"]
-    return bool(prev_bearish and curr_bullish and engulfs)
-
-def detect_hammer(data, body_ratio_max=0.3, lower_wick_min_ratio=2.0, upper_wick_max_range_ratio=0.15):
-    last = data.iloc[-1]
-    body = abs(last["Close"] - last["Open"])
-    total_range = last["High"] - last["Low"]
-    if total_range <= 0:
-        return False
-    upper_wick = last["High"] - max(last["Close"], last["Open"])
-    lower_wick = min(last["Close"], last["Open"]) - last["Low"]
-
-    small_body = body <= total_range * body_ratio_max
-    long_lower_wick = lower_wick >= body * lower_wick_min_ratio if body > 0 else lower_wick > total_range * 0.5
-    # l'ombra superiore va confrontata al range TOTALE, non al corpo: se il
-    # corpo è minuscolo (quasi doji), un confronto solo col corpo rende il
-    # controllo instabile (anche un'ombra piccola in assoluto "esplode"
-    # in rapporto a un corpo vicino a zero)
-    small_upper_wick = upper_wick <= total_range * upper_wick_max_range_ratio
-    return bool(small_body and long_lower_wick and small_upper_wick)
-
-# ==========================
-# STRATEGIA: PATTERN DI INVERSIONE (CANDLESTICK) SU SUPPORTO
-# ==========================
-# Compra quando, sul supporto (trend line ascendente sui pivot), si
-# forma un pattern di inversione rialzista: Bullish Engulfing (la
-# candela di oggi "inghiotte" completamente quella di ieri, ribassista
-# ieri e rialzista oggi) o Hammer (corpo piccolo in alto nel range,
-# ombra inferiore lunga, poca o nessuna ombra superiore). A differenza
-# degli indicatori calcolati, guarda la forma stessa delle candele.
-
-def compute_strategy_candlestick_reversal(data, touch_tolerance=0.02):
-    if len(data) < 2:
-        return {"signal": "NEUTRALE", "conditions": [("Storico sufficiente", False)]}
-
-    last = data.iloc[-1]
-    support = compute_swing_trendline(data, lookback=min(90, len(data)), pivot_window=3, kind="low")
-
-    if support is None:
-        return {"signal": "NEUTRALE", "conditions": [("Trend line di supporto rilevata", False)]}
-
-    near_support = last["Low"] <= support["value_today"] * (1 + touch_tolerance)
-    conditions = [("Prezzo vicino al supporto (trend line ascendente)", bool(near_support))]
-
-    is_engulfing = detect_bullish_engulfing(data)
-    is_hammer = detect_hammer(data)
-    pattern_name = "Bullish Engulfing" if is_engulfing else ("Hammer" if is_hammer else "nessuno")
-    conditions.append((f"Pattern di inversione rialzista rilevato ({pattern_name})", bool(is_engulfing or is_hammer)))
-
-    signal = "ACQUISTO" if all(met for _, met in conditions) else "NEUTRALE"
-    return {"signal": signal, "conditions": conditions, "support_value": support["value_today"]}
-
-# ==========================
-# STRATEGIA: TRIANGOLO SIMMETRICO CON BREAKOUT
-# ==========================
-# Riusa compute_swing_trendline (già impone che il supporto salga e la
-# resistenza scenda): se entrambe esistono nella stessa finestra
-# temporale, per costruzione le due linee stanno convergendo — è
-# esattamente la definizione di un triangolo simmetrico. Compra sulla
-# rottura rialzista della resistenza del triangolo.
-
-def compute_strategy_triangle_breakout(data, lookback=60, pivot_window=3):
-    support = compute_swing_trendline(data, lookback=min(lookback, len(data)), pivot_window=pivot_window, kind="low")
-    resistance = compute_swing_trendline(data, lookback=min(lookback, len(data)), pivot_window=pivot_window, kind="high")
-
-    if support is None or resistance is None:
-        return {
-            "signal": "NEUTRALE",
-            "conditions": [("Triangolo simmetrico rilevato (supporto ascendente + resistenza discendente)", False)],
-        }
-
-    conditions = [("Triangolo simmetrico rilevato (supporto ascendente + resistenza discendente)", True)]
-
-    valid_channel = resistance["value_today"] > support["value_today"]
-    conditions.append(("Canale ancora valido (supporto sotto la resistenza, non ancora incrociati)", bool(valid_channel)))
-
-    last_close = data["Close"].iloc[-1]
-    breakout = last_close > resistance["value_today"]
-    conditions.append(("Rottura rialzista della resistenza del triangolo", bool(breakout)))
-
-    signal = "ACQUISTO" if all(met for _, met in conditions) else "NEUTRALE"
-    return {
-        "signal": signal, "conditions": conditions,
-        "support_value": support["value_today"], "resistance_value": resistance["value_today"],
-    }
-
-# ==========================
-# STRATEGIA: BANDIERA RIALZISTA (BULL FLAG)
-# ==========================
-# Tre ingredienti: 1) un'asta forte (rialzo netto nei giorni prima
-# della bandiera), 2) una bandiera stretta (consolidamento con range
-# ridotto subito dopo l'asta), 3) la rottura sopra il massimo della
-# bandiera per confermare la ripartenza.
-
-def compute_strategy_bull_flag(data, pole_lookback=20, pole_min_return=0.08,
-                                flag_lookback=10, flag_max_range=0.06):
-    n = len(data)
-    if n < pole_lookback + flag_lookback + 5:
-        return {"signal": "NEUTRALE", "conditions": [("Storico sufficiente per asta + bandiera", False)]}
-
-    flag_window = data.iloc[-(flag_lookback + 1):-1]  # bandiera: i giorni prima di oggi, oggi escluso
-    pole_window = data.iloc[-(flag_lookback + pole_lookback + 1):-(flag_lookback + 1)]  # l'asta, prima della bandiera
-
-    pole_start = pole_window["Close"].iloc[0]
-    pole_end = pole_window["Close"].iloc[-1]
-    pole_return = (pole_end - pole_start) / pole_start if pole_start else 0
-    strong_pole = pole_return >= pole_min_return
-
-    flag_high = flag_window["High"].max()
-    flag_low = flag_window["Low"].min()
-    flag_mid = (flag_high + flag_low) / 2
-    flag_range_pct = (flag_high - flag_low) / flag_mid if flag_mid > 0 else 999
-    tight_flag = flag_range_pct <= flag_max_range
-
-    today_close = data["Close"].iloc[-1]
-    breakout = today_close > flag_high
-
-    conditions = [
-        (f"Asta forte prima della bandiera (rendimento {pole_lookback}gg = {round(pole_return*100,1)}% >= {pole_min_return*100:.0f}%)", bool(strong_pole)),
-        (f"Consolidamento stretto (range bandiera = {round(flag_range_pct*100,1)}% <= {flag_max_range*100:.0f}%)", bool(tight_flag)),
-        ("Rottura sopra il massimo della bandiera", bool(breakout)),
-    ]
-
-    signal = "ACQUISTO" if all(met for _, met in conditions) else "NEUTRALE"
-    return {"signal": signal, "conditions": conditions, "flag_high": flag_high, "pole_return": pole_return}
+# Le strategie a regole fisse (pullback ipervenduto, pullback EMA20, Turtle,
+# candlestick, triangolo, bull flag) sono state rimosse: col backtest
+# realistico (backtest_v2.py, 10 anni) perdevano tutte dopo i costi.
+# Le strategie attuali sono in strategies_pro.py.
 
 def backtest_strategy_signal(data, strategy_fn, forward_days=(5, 10, 20), min_history=200):
     """Walk-forward generico: ogni giorno vede solo il passato, applica

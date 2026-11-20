@@ -30,12 +30,6 @@ from core import (
     compute_indicators,
     compute_atr,
     compute_trade_signal,
-    compute_strategy_pullback_oversold,
-    compute_strategy_trend_pullback,
-    compute_strategy_turtle_breakout,
-    compute_strategy_candlestick_reversal,
-    compute_strategy_triangle_breakout,
-    compute_strategy_bull_flag,
     ALERT_STRATEGY_CONFIG,
 )
 
@@ -53,12 +47,6 @@ def _always_buy(window):
 # chiave -> (nome leggibile, funzione)
 STRATEGIES = {
     "trade_signal": ("Segnale combinato (rottura + 3 conferme)", _trade_signal_long),
-    "pullback_oversold": ("Rottura resistenza + momentum basso", compute_strategy_pullback_oversold),
-    "trend_pullback": ("Pullback alla EMA20 in trend forte", compute_strategy_trend_pullback),
-    "turtle_breakout": ("Turtle Trading (Donchian 20)", compute_strategy_turtle_breakout),
-    "candlestick_reversal": ("Candlestick su supporto", compute_strategy_candlestick_reversal),
-    "triangle_breakout": ("Triangolo simmetrico", compute_strategy_triangle_breakout),
-    "bull_flag": ("Bull Flag", compute_strategy_bull_flag),
     # riferimento: entrare a caso (qui: appena possibile, sempre). Con le
     # stesse regole di stop/target/costi mostra quanto vale "nessun
     # vantaggio": una strategia utile deve fare MEGLIO di questa riga.
