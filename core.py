@@ -55,12 +55,13 @@ ALERT_STRATEGY_CONFIG = {
 # LISTA TITOLI ITALIANI
 # ==========================
 
+# Tolti nel 11/2026 perché senza dati su Yahoo (fusi, delistati o ticker
+# errati): BPSO.MI, CNHI.MI, EXO.MI, IT.MI, LR.MI, VIV.MI
 ITALIAN_TICKERS = [
     "ENI.MI", "ENEL.MI", "ISP.MI", "UCG.MI", "STLAM.MI", "LDO.MI", "RACE.MI",
-    "MONC.MI", "TRN.MI", "PST.MI", "AMP.MI", "BMED.MI", "BAMI.MI", "BPSO.MI",
-    "BPE.MI", "CNHI.MI", "DIA.MI", "ERG.MI", "EXO.MI", "G.MI", "IG.MI",
-    "IT.MI", "JUVE.MI", "LR.MI", "MS.MI", "PRY.MI", "REC.MI", "SFER.MI",
-    "TIT.MI", "TEN.MI", "UNI.MI", "VIV.MI"
+    "MONC.MI", "TRN.MI", "PST.MI", "AMP.MI", "BMED.MI", "BAMI.MI", "BPE.MI",
+    "DIA.MI", "ERG.MI", "G.MI", "IG.MI", "JUVE.MI", "MS.MI", "PRY.MI",
+    "REC.MI", "SFER.MI", "TIT.MI", "TEN.MI", "UNI.MI"
 ]
 
 # ==========================
